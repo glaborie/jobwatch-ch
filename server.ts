@@ -132,6 +132,70 @@ async function startServer() {
           console.error("Error scraping LinkedIn:", e);
         }
 
+        // 4. jobup.ch (French-speaking Switzerland focus)
+        try {
+          const jobupUrl = `https://www.jobup.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
+          const response = await axios.get(jobupUrl, { headers: HEADERS });
+          const $ = cheerio.load(response.data);
+          
+          $('[data-cy="job-item"]').each((_, el) => {
+            const title = $(el).find('h2').text().trim();
+            const link = $(el).find('a').attr('href');
+            const url = link ? (link.startsWith('http') ? link : `https://www.jobup.ch${link}`) : '';
+            const pTags = $(el).find('p.textStyle_caption1');
+            const location = pTags.eq(1).text().trim();
+            const company = pTags.last().text().trim();
+            const description = $(el).find('[data-cy="job-snippet"]').text().trim();
+
+            if (title && url) {
+              allJobs.push({
+                title,
+                company: company || "Unknown Company",
+                location: location || "Switzerland",
+                url,
+                description: description || undefined,
+                source: "jobup.ch",
+                query,
+                scrapedAt: new Date().toISOString(),
+                status: "new"
+              });
+            }
+          });
+        } catch (e) {
+          console.error("Error scraping jobup.ch:", e);
+        }
+
+        // 5. Indeed (Switzerland) - Note: Indeed has high bot protection
+        try {
+          const indeedUrl = `https://ch.indeed.com/jobs?q=${encodeURIComponent(query)}&l=Switzerland`;
+          const response = await axios.get(indeedUrl, { headers: HEADERS });
+          const $ = cheerio.load(response.data);
+          
+          $('.job_seen_beacon').each((_, el) => {
+            const title = $(el).find('h2.jobTitle').text().trim();
+            const company = $(el).find('[data-testid="company-name"]').text().trim();
+            const location = $(el).find('[data-testid="text-location"]').text().trim();
+            const link = $(el).find('a.jcs-JobTitle').attr('href');
+            const url = link ? `https://ch.indeed.com${link}` : '';
+
+            if (title && url) {
+              allJobs.push({
+                title,
+                company: company || "Unknown Company",
+                location: location || "Switzerland",
+                url,
+                description: "View full description on Indeed.",
+                source: "Indeed",
+                query,
+                scrapedAt: new Date().toISOString(),
+                status: "new"
+              });
+            }
+          });
+        } catch (e) {
+          console.error("Error scraping Indeed:", e);
+        }
+
         // LinkedIn/Indeed/Glassdoor often have heavy bot protection.
         // For this demo, we'll focus on the more accessible Swiss ones or provide placeholders/simulated results
         // if they block us.
