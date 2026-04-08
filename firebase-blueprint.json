@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "Job": {
+      "title": "Job",
+      "description": "A job posting scraped from a job board.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The job title." },
+        "company": { "type": "string", "description": "The company name." },
+        "location": { "type": "string", "description": "The job location." },
+        "url": { "type": "string", "format": "uri", "description": "The original job posting URL." },
+        "source": { "type": "string", "description": "The source job board (e.g., LinkedIn, Indeed)." },
+        "description": { "type": "string", "description": "A brief description or snippet of the job." },
+        "scrapedAt": { "type": "string", "format": "date-time", "description": "When the job was scraped." },
+        "query": { "type": "string", "description": "The search query used to find this job." },
+        "status": { "type": "string", "enum": ["new", "discarded", "applied"], "description": "The current status of the job application." }
+      },
+      "required": ["title", "company", "url", "source", "scrapedAt", "status"]
+    }
+  },
+  "firestore": {
+    "/jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Collection of scraped job postings."
+    }
+  }
+}

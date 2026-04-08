@@ -1,0 +1,15 @@
+{
+  "apiKey": "YOUR_API_KEY",
+  "authDomain": "YOUR_PROJECT_ID.firebaseapp.com",
+  "projectId": "YOUR_PROJECT_ID",
+  "storageBucket": "YOUR_PROJECT_ID.appspot.com",
+  "messagingSenderId": "YOUR_MESSAGING_SENDER_ID",
+  "appId": "YOUR_APP_ID",
+  "firestoreDatabaseId": "(default)"
+}
+// Instructions:
+// 1. Go to the Firebase Console (https://console.firebase.google.com/)
+// 2. Select your project and go to Project Settings.
+// 3. Under "Your apps", find your Web app and copy the firebaseConfig object.
+// 4. Create a file named 'firebase-applet-config.json' in the root directory.
+// 5. Paste the values into that file following the structure above.

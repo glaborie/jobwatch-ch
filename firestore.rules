@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: jobs
+    // Document ID: auto-generated
+    // Fields:
+    //   - title: string (required)
+    //   - company: string (required)
+    //   - location: string (optional)
+    //   - url: string (required, unique-ish)
+    //   - source: string (required)
+    //   - description: string (optional)
+    //   - scrapedAt: timestamp (required)
+    //   - query: string (optional)
+    //   - status: string (required, enum: ["new", "discarded", "applied"])
+    //
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isValidJob(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.company is string && data.company.size() > 0 && data.company.size() < 200 &&
+             data.url is string && data.url.size() > 0 && data.url.size() < 2000 &&
+             data.source is string && data.source.size() > 0 && data.source.size() < 100 &&
+             data.scrapedAt is timestamp &&
+             data.status in ["new", "discarded", "applied"];
+    }
+
+    match /jobs/{jobId} {
+      // For this app, we'll allow authenticated users to read and the server (admin) to write.
+      // Since we don't have a separate admin role yet, we'll allow authenticated users to read.
+      // The server will use the Admin SDK or we'll allow writes if authenticated for this demo.
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidJob(request.resource.data);
+      allow update: if isAuthenticated() && isValidJob(request.resource.data);
+      allow delete: if false; // Only manual cleanup
+    }
+    
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Swiss AI Job Scraper",
+  "description": "A full-stack application to scrape and track AI-related job openings from major Swiss job boards and LinkedIn.",
+  "requestFramePermissions": []
+}
