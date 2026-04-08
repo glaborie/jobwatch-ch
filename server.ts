@@ -48,6 +48,7 @@ async function startServer() {
             const pTags = $(el).find('p.textStyle_caption1');
             const location = pTags.eq(1).text().trim(); // Usually the 2nd p tag
             const company = pTags.last().text().trim(); // Usually the last p tag
+            const description = $(el).find('[data-cy="job-snippet"]').text().trim();
 
             if (title && url) {
               allJobs.push({
@@ -55,6 +56,7 @@ async function startServer() {
                 company: company || "Unknown Company",
                 location: location || "Switzerland",
                 url,
+                description: description || undefined,
                 source: "jobs.ch",
                 query,
                 scrapedAt: new Date().toISOString(),
@@ -78,6 +80,7 @@ async function startServer() {
             const company = parent.find('.author-text').text().trim();
             // Location is usually the last span in company-location
             const location = parent.find('.company-location span').last().text().trim();
+            const description = parent.find('.description').text().trim();
             const link = $(el).find('a').attr('href');
             const url = link ? (link.startsWith('http') ? link : `https://ictjobs.ch${link}`) : '';
 
@@ -87,6 +90,7 @@ async function startServer() {
                 company: company || "Unknown Company",
                 location: location || "Switzerland",
                 url,
+                description: description || undefined,
                 source: "ictjobs.ch",
                 query,
                 scrapedAt: new Date().toISOString(),
@@ -96,6 +100,36 @@ async function startServer() {
           });
         } catch (e) {
           console.error("Error scraping ictjobs.ch:", e);
+        }
+
+        // 3. LinkedIn (Guest API)
+        try {
+          const linkedInUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=Switzerland&start=0`;
+          const response = await axios.get(linkedInUrl, { headers: HEADERS });
+          const $ = cheerio.load(response.data);
+          
+          $('li').each((_, el) => {
+            const title = $(el).find('.base-search-card__title').text().trim();
+            const company = $(el).find('.base-search-card__subtitle').text().trim();
+            const location = $(el).find('.job-search-card__location').text().trim();
+            const link = $(el).find('a.base-card__full-link').attr('href');
+            
+            if (title && link) {
+              allJobs.push({
+                title,
+                company: company || "Unknown Company",
+                location: location || "Switzerland",
+                url: link,
+                description: "View full description on LinkedIn.",
+                source: "LinkedIn",
+                query,
+                scrapedAt: new Date().toISOString(),
+                status: "new"
+              });
+            }
+          });
+        } catch (e) {
+          console.error("Error scraping LinkedIn:", e);
         }
 
         // LinkedIn/Indeed/Glassdoor often have heavy bot protection.

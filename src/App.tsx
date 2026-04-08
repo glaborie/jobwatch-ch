@@ -15,7 +15,9 @@ import {
   Trash2,
   Send,
   Inbox,
-  Filter
+  Filter,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -67,6 +69,7 @@ export default function App() {
   const [activeFilter, setActiveFilter] = useState<JobStatus | 'all'>('new');
   const [pageSize, setPageSize] = useState(10);
   const [hasMore, setHasMore] = useState(true);
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -399,50 +402,80 @@ export default function App() {
                       initial={{ opacity: 0, x: 20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: idx * 0.05 }}
-                      className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group"
+                      className={`bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group overflow-hidden ${
+                        expandedJobId === job.id ? 'ring-2 ring-blue-500 ring-opacity-50' : ''
+                      }`}
                     >
-                      <div className="flex justify-between items-start gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h4 className="font-bold text-lg group-hover:text-blue-600 transition-colors leading-tight">
-                              {job.title}
-                            </h4>
-                            {job.status === 'applied' && (
-                              <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                                Applied
-                              </span>
-                            )}
+                      <div 
+                        className="p-5 cursor-pointer"
+                        onClick={() => setExpandedJobId(expandedJobId === job.id ? null : (job.id || null))}
+                      >
+                        <div className="flex justify-between items-start gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-bold text-lg group-hover:text-blue-600 transition-colors leading-tight">
+                                {job.title}
+                              </h4>
+                              {job.status === 'applied' && (
+                                <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                  Applied
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-y-2 gap-x-4 mt-2 text-sm text-slate-600">
+                              <div className="flex items-center gap-1.5">
+                                <Building2 className="w-4 h-4 text-slate-400" />
+                                {job.company}
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <MapPin className="w-4 h-4 text-slate-400" />
+                                {job.location || "Switzerland"}
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
+                                  {job.source}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex flex-wrap gap-y-2 gap-x-4 mt-2 text-sm text-slate-600">
-                            <div className="flex items-center gap-1.5">
-                              <Building2 className="w-4 h-4 text-slate-400" />
-                              {job.company}
+                          <div className="flex items-center gap-2">
+                            <div className="text-slate-400 group-hover:text-blue-600 transition-colors">
+                              {expandedJobId === job.id ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              <MapPin className="w-4 h-4 text-slate-400" />
-                              {job.location || "Switzerland"}
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
-                                {job.source}
-                              </span>
-                            </div>
+                            <a 
+                              href={job.url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="p-2 bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded-lg transition-all"
+                              title="View Job"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink className="w-5 h-5" />
+                            </a>
                           </div>
                         </div>
-                        <div className="flex flex-col gap-2">
-                          <a 
-                            href={job.url} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="p-2 bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded-lg transition-all"
-                            title="View Job"
-                          >
-                            <ExternalLink className="w-5 h-5" />
-                          </a>
-                        </div>
+
+                        <AnimatePresence>
+                          {expandedJobId === job.id && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.3, ease: 'easeInOut' }}
+                              className="overflow-hidden"
+                            >
+                              <div className="mt-4 pt-4 border-t border-slate-100">
+                                <h5 className="text-sm font-bold text-slate-900 mb-2">Job Description</h5>
+                                <p className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">
+                                  {job.description || "No detailed description available for this snippet. Click the external link to view full details."}
+                                </p>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                       
-                      <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
+                      <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
                         <div className="flex gap-2">
                           {job.status !== 'applied' && (
                             <button
