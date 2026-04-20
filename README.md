@@ -49,6 +49,21 @@ npm run build
 npm start
 ```
 
+## Docker Instructions
+
+You can also run the application as a containerized service.
+
+### 1. Build the Image
+```bash
+docker build -t swiss-job-scraper .
+```
+
+### 2. Run the Container
+```bash
+docker run -p 3000:3000 --env-file .env swiss-job-scraper
+```
+The app will be accessible at `http://localhost:3000`.
+
 ## Project Structure
 
 - `server.ts`: Express backend handling the scraping logic.
