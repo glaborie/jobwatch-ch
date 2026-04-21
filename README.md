@@ -15,7 +15,7 @@ A full-stack web application designed to scrape, track, and manage AI-related jo
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com/glaborie/jobwatch-ch
-cd swiss-ai-job-scraper
+cd jobwatch-ch
 ```
 
 ### 2. Install Dependencies
