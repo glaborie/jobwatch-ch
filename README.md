@@ -1,4 +1,4 @@
-# Swiss AI Job Scraper
+# JobWatch-CH
 
 A full-stack web application designed to scrape, track, and manage AI-related job opportunities from Swiss job boards (`jobs.ch` and `ictjobs.ch`).
 
@@ -14,7 +14,7 @@ A full-stack web application designed to scrape, track, and manage AI-related jo
 
 ### 1. Clone the Repository
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/glaborie/jobwatch-ch
 cd swiss-ai-job-scraper
 ```
 
