@@ -332,7 +332,7 @@ export default function App() {
             <div className="bg-blue-600 p-2 rounded-lg">
               <Database className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">Swiss AI Job Scraper</h1>
+            <h1 className="text-xl font-bold tracking-tight">JobWatch-CH</h1>
           </div>
           
           {user ? (

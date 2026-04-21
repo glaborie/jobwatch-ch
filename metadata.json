@@ -1,5 +1,8 @@
 {
-  "name": "Swiss AI Job Scraper",
+  "name": "JobWatch-CH",
   "description": "A full-stack application to scrape and track AI-related job openings from major Swiss job boards and LinkedIn.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "cloudRun": {
+    "serviceAccount": "swiss-ai-job-scraper@gcp-tutorials-406708.iam.gserviceaccount.com"
+  }
 }

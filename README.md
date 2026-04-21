@@ -64,6 +64,44 @@ docker run -p 3000:3000 --env-file .env swiss-job-scraper
 ```
 The app will be accessible at `http://localhost:3000`.
 
+### 3. Cloud Infrastructure Setup
+
+Run the following commands to create the service account and assign the necessary IAM roles:
+
+```bash
+# Set project ID
+PROJECT_ID=$(gcloud config get project)
+SA_NAME="swiss-ai-job-scraper"
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# Create the service account
+gcloud iam service-accounts create ${SA_NAME} \
+    --display-name="Swiss AI Job Scraper Service Account" \
+    --project=${PROJECT_ID}
+
+# Assign roles for Logging, Monitoring, and Firestore
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/logging.logWriter"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/monitoring.metricWriter"
+
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/datastore.user"
+
+# Optional: Access to Secret Manager
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/secretmanager.secretAccessor"
+```
+
+### 4. Cloud Run Deployment
+When deploying to Cloud Run, specify the newly created service account:
+`swiss-ai-job-scraper@gcp-tutorials-406708.iam.gserviceaccount.com`
+
 ## Project Structure
 
 - `server.ts`: Express backend handling the scraping logic.
