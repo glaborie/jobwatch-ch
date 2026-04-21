@@ -2,7 +2,7 @@
 
 A full-stack web application designed to scrape, track, and manage AI-related job opportunities from Swiss job boards (`jobs.ch` and `ictjobs.ch`).
 
-![JobScraper screenshot](assets/screenshot.png)
+![JobScraper screenshot](assets/JobWatch-CH.png)
 
 ## Features
 
