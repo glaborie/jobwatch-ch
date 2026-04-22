@@ -18,7 +18,8 @@ import {
   Filter,
   ChevronDown,
   ChevronUp,
-  Download
+  Download,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -40,9 +41,11 @@ import {
   getDocs,
   updateDoc,
   doc,
-  limit
+  limit,
+  getDoc,
+  setDoc
 } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db, ai } from './firebase';
 
 type JobStatus = 'new' | 'discarded' | 'applied';
 
@@ -54,6 +57,7 @@ interface Job {
   url: string;
   source: string;
   description?: string;
+  summary?: string;
   scrapedAt: Timestamp | string;
   query: string;
   status: JobStatus;
@@ -89,6 +93,58 @@ export default function App() {
     const saved = localStorage.getItem('ignoredLocations');
     return saved ? JSON.parse(saved) : [];
   });
+  const [summarizingIds, setSummarizingIds] = useState<Set<string>>(new Set());
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+
+  // Load settings from Firestore
+  useEffect(() => {
+    if (!user) {
+      setSettingsLoaded(false);
+      return;
+    }
+
+    const loadSettings = async () => {
+      try {
+        const settingsRef = doc(db, 'users', user.uid, 'settings', 'preferences');
+        const settingsSnap = await getDoc(settingsRef);
+        
+        if (settingsSnap.exists()) {
+          const data = settingsSnap.data();
+          if (data.ignoredLocations) setIgnoredLocations(data.ignoredLocations);
+          if (data.searchQueries) setSearchQueries(data.searchQueries);
+          if (data.selectedSources) setSelectedSources(data.selectedSources);
+          if (data.excludedKeywords) setExcludedKeywords(data.excludedKeywords);
+        }
+        setSettingsLoaded(true);
+      } catch (err) {
+        console.error("Error loading settings:", err);
+      }
+    };
+
+    loadSettings();
+  }, [user]);
+
+  // Sync settings to Firestore
+  useEffect(() => {
+    if (!user || !settingsLoaded) return;
+
+    const syncSettings = async () => {
+      try {
+        const settingsRef = doc(db, 'users', user.uid, 'settings', 'preferences');
+        await setDoc(settingsRef, {
+          ignoredLocations,
+          searchQueries,
+          selectedSources,
+          excludedKeywords
+        }, { merge: true });
+      } catch (err) {
+        console.error("Error syncing settings:", err);
+      }
+    };
+
+    const timeoutId = setTimeout(syncSettings, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [user, settingsLoaded, ignoredLocations, searchQueries, selectedSources, excludedKeywords]);
 
   // Save to localStorage whenever state changes
   useEffect(() => {
@@ -232,6 +288,38 @@ export default function App() {
     } catch (error) {
       console.error("Update status error:", error);
       setStatus({ type: 'error', message: "Failed to update job status." });
+    }
+  };
+
+  const generateSummary = async (job: Job) => {
+    if (!job.id || job.summary || summarizingIds.has(job.id)) return;
+    
+    setSummarizingIds(prev => new Set(prev).add(job.id!));
+    
+    try {
+      const prompt = `Summarize this job description in 2-3 short bullet points highlighting key requirements and benefits:
+      
+      Job Title: ${job.title}
+      Company: ${job.company}
+      Description: ${job.description || "No description provided."}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+      });
+
+      const summary = response.text || "Summary generation failed.";
+      
+      const jobRef = doc(db, "jobs", job.id);
+      await updateDoc(jobRef, { summary });
+    } catch (error) {
+      console.error("Gemini summary error:", error);
+    } finally {
+      setSummarizingIds(prev => {
+        const next = new Set(prev);
+        next.delete(job.id!);
+        return next;
+      });
     }
   };
 
@@ -610,15 +698,15 @@ export default function App() {
                   </div>
                 ) : (
                   filteredJobs.map((job, idx) => (
-                    <motion.div 
-                      key={job.id || idx}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.05 }}
-                      className={`bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group overflow-hidden ${
-                        expandedJobId === job.id ? 'ring-2 ring-blue-500 ring-opacity-50' : ''
-                      }`}
-                    >
+                      <motion.div 
+                        key={job.id || idx}
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                        className={`bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group ${
+                          expandedJobId === job.id ? 'ring-2 ring-blue-500 ring-opacity-50' : ''
+                        }`}
+                      >
                       <div 
                         className="p-5 cursor-pointer"
                         onClick={() => setExpandedJobId(expandedJobId === job.id ? null : (job.id || null))}
@@ -629,6 +717,34 @@ export default function App() {
                               <h4 className="font-bold text-lg group-hover:text-blue-600 transition-colors leading-tight">
                                 {job.title}
                               </h4>
+                              {job.summary && (
+                                <div className="group/summary relative">
+                                  <Sparkles className="w-4 h-4 text-amber-500 fill-amber-50 cursor-help" />
+                                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3.5 bg-slate-900 text-white text-xs rounded-xl shadow-2xl opacity-0 invisible group-hover/summary:opacity-100 group-hover/summary:visible transition-all z-[100] pointer-events-none border border-white/10">
+                                    <div className="font-bold flex items-center gap-1.5 mb-1.5 text-amber-400 border-b border-white/10 pb-1">
+                                      <Sparkles className="w-3 h-3" />
+                                      AI Insights
+                                    </div>
+                                    <div className="leading-relaxed whitespace-pre-wrap italic opacity-90">
+                                      {job.summary}
+                                    </div>
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-slate-900"></div>
+                                  </div>
+                                </div>
+                              )}
+                              {!job.summary && (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    generateSummary(job);
+                                  }}
+                                  disabled={summarizingIds.has(job.id!)}
+                                  className={`p-1 rounded hover:bg-amber-50 transition-colors ${summarizingIds.has(job.id!) ? 'animate-pulse' : ''}`}
+                                  title="Generate AI Summary"
+                                >
+                                  <Sparkles className={`w-4 h-4 ${summarizingIds.has(job.id!) ? 'text-amber-400' : 'text-slate-300 hover:text-amber-500'}`} />
+                                </button>
+                              )}
                               {job.status === 'applied' && (
                                 <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
                                   Applied
@@ -697,7 +813,7 @@ export default function App() {
                         </AnimatePresence>
                       </div>
                       
-                      <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+                      <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between rounded-b-2xl">
                         <div className="flex gap-2">
                           {job.status !== 'applied' && (
                             <button

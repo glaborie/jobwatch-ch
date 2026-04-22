@@ -13,15 +13,31 @@
         "description": { "type": "string", "description": "A brief description or snippet of the job." },
         "scrapedAt": { "type": "string", "format": "date-time", "description": "When the job was scraped." },
         "query": { "type": "string", "description": "The search query used to find this job." },
-        "status": { "type": "string", "enum": ["new", "discarded", "applied"], "description": "The current status of the job application." }
+        "status": { "type": "string", "enum": ["new", "discarded", "applied"], "description": "The current status of the job application." },
+        "summary": { "type": "string", "description": "An AI-generated summary of the job description." }
       },
       "required": ["title", "company", "url", "source", "scrapedAt", "status"]
+    },
+    "UserSettings": {
+      "title": "User Settings",
+      "description": "User-specific preferences and filters.",
+      "type": "object",
+      "properties": {
+        "ignoredLocations": { "type": "array", "items": { "type": "string" }, "description": "Locations to exclude from the job list." },
+        "searchQueries": { "type": "array", "items": { "type": "string" }, "description": "Active search queries for scraping." },
+        "selectedSources": { "type": "array", "items": { "type": "string" }, "description": "Sources enabled for scraping." },
+        "excludedKeywords": { "type": "array", "items": { "type": "string" }, "description": "Keywords to filter out from job titles/descriptions." }
+      }
     }
   },
   "firestore": {
     "/jobs/{jobId}": {
       "schema": "Job",
       "description": "Collection of scraped job postings."
+    },
+    "/users/{userId}/settings/preferences": {
+      "schema": "UserSettings",
+      "description": "User-specific application preferences."
     }
   }
 }

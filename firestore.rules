@@ -35,7 +35,8 @@ service cloud.firestore {
         && data.url is string && data.url.size() <= 2048
         && data.source is string && data.source.size() <= 50
         && data.status in ['new', 'applied', 'discarded']
-        && (data.get('description', '') is string && data.get('description', '').size() <= 5000);
+        && (data.get('description', '') is string && data.get('description', '').size() <= 6000)
+        && (data.get('summary', '') is string && data.get('summary', '').size() <= 2000);
     }
 
     match /jobs/{jobId} {
@@ -52,13 +53,17 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && isValidJob(incoming())
         && (
-          // Action: Scraper update or User status update
-          // If we want to be strict, we check status transitions
+          // Action: Scraper update or User status update or AI summary update
           incoming().diff(existing()).affectedKeys().hasOnly(['status'])
-          || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'company', 'url', 'source', 'scrapedAt', 'status', 'description', 'query', 'location'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['summary'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'company', 'url', 'source', 'scrapedAt', 'status', 'description', 'query', 'location', 'summary'])
         );
       
       allow delete: if false; // Prevention of accidental data loss
+    }
+
+    match /users/{userId}/settings/preferences {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
   }
 }
