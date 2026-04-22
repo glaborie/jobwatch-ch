@@ -1,14 +1,27 @@
 # JobWatch-CH
 
-A full-stack web application designed to scrape, track, and manage AI-related job opportunities from Swiss job boards (`jobs.ch` and `ictjobs.ch`).
+A full-stack web application to scrape, track, and manage AI job opportunities
+from Swiss job boards: jobs.ch, ictjobs.ch, jobup.ch, LinkedIn, Indeed CH, and SwissDevJobs.
 
-![JobScraper screenshot](assets/JobWatch-CH.png)
+Built to support my own career transition into AI Engineering - because manually
+checking six job boards every day gets old fast.
+
+## Screenshot
+![JobWatch-CH screenshot](assets/JobWatch-CH.png)
+
+## Stack
+![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)
+![Firebase](https://img.shields.io/badge/Firebase-FFCA28?style=flat&logo=firebase&logoColor=black)
+![GCP](https://img.shields.io/badge/GCP-4285F4?style=flat&logo=google-cloud&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
 
 ## Features
 
 - **Automated Scraping**: Fetches the latest job postings based on customizable search queries.
 - **Real-time Tracking**: Uses Firebase Firestore to store and sync job data instantly.
 - **Status Management**: Track your progress by marking jobs as "New", "Applied", or "Discarded".
+- **AI Insights**: On-demand job description summaries powered by Google Gemini. highlights key requirements, tech stack, and fit signals at a glance.
 - **Pagination**: Efficiently browse through large numbers of job listings.
 - **Google Authentication**: Secure access using Firebase Auth.
 
@@ -57,12 +70,12 @@ You can also run the application as a containerized service.
 
 ### 1. Build the Image
 ```bash
-docker build -t swiss-job-scraper .
+docker build -t jobwatch-ch .
 ```
 
 ### 2. Run the Container
 ```bash
-docker run -p 3000:3000 --env-file .env swiss-job-scraper
+docker run -p 3000:3000 --env-file .env jobwatch-ch
 ```
 The app will be accessible at `http://localhost:3000`.
 
@@ -73,12 +86,12 @@ Run the following commands to create the service account and assign the necessar
 ```bash
 # Set project ID
 PROJECT_ID=$(gcloud config get project)
-SA_NAME="swiss-ai-job-scraper"
+SA_NAME="jobwatch-ch-sa"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 # Create the service account
 gcloud iam service-accounts create ${SA_NAME} \
-    --display-name="Swiss AI Job Scraper Service Account" \
+    --display-name="Jobwatch-CH Service Account" \
     --project=${PROJECT_ID}
 
 # Assign roles for Logging, Monitoring, and Firestore
@@ -102,7 +115,7 @@ gcloud projects add-iam-policy-binding ${PROJECT_ID} \
 
 ### 4. Cloud Run Deployment
 When deploying to Cloud Run, specify the newly created service account:
-`swiss-ai-job-scraper@gcp-tutorials-406708.iam.gserviceaccount.com`
+`jobwatch-ch-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com`
 
 ## Project Structure
 
