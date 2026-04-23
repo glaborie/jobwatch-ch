@@ -7,7 +7,7 @@ Built to support my own career transition into AI Engineering - because manually
 checking six job boards every day gets old fast.
 
 ## Screenshot
-![JobWatch-CH screenshot](assets/JobWatch-CH.png)
+![JobWatch-CH screenshot](https://github.com/glaborie/jobwatch-ch/raw/main/assets/JobWatch-CH.png)
 
 ## Stack
 ![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white)
