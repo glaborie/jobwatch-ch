@@ -597,7 +597,7 @@ export default function App() {
                   <MapPin className="w-5 h-5 text-blue-600" />
                   Ignored Locations
                 </h3>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
                   {ignoredLocations.map(loc => (
                     <span 
                       key={loc} 
