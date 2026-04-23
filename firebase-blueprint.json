@@ -26,7 +26,8 @@
         "ignoredLocations": { "type": "array", "items": { "type": "string" }, "description": "Locations to exclude from the job list." },
         "searchQueries": { "type": "array", "items": { "type": "string" }, "description": "Active search queries for scraping." },
         "selectedSources": { "type": "array", "items": { "type": "string" }, "description": "Sources enabled for scraping." },
-        "excludedKeywords": { "type": "array", "items": { "type": "string" }, "description": "Keywords to filter out from job titles/descriptions." }
+        "excludedKeywords": { "type": "array", "items": { "type": "string" }, "description": "Keywords to filter out from job titles/descriptions." },
+        "theme": { "type": "string", "enum": ["light", "dark"], "description": "The user's preferred visual theme." }
       }
     }
   },

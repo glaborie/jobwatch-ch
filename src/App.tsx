@@ -19,7 +19,9 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  Sparkles
+  Sparkles,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -95,6 +97,27 @@ export default function App() {
   });
   const [summarizingIds, setSummarizingIds] = useState<Set<string>>(new Set());
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('theme');
+      return (saved as 'light' | 'dark') || 'light';
+    } catch (e) {
+      return 'light';
+    }
+  });
+
+  // Apply theme to document
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    try {
+      localStorage.setItem('theme', theme);
+    } catch (e) {}
+  }, [theme]);
 
   // Load settings from Firestore
   useEffect(() => {
@@ -114,6 +137,7 @@ export default function App() {
           if (data.searchQueries) setSearchQueries(data.searchQueries);
           if (data.selectedSources) setSelectedSources(data.selectedSources);
           if (data.excludedKeywords) setExcludedKeywords(data.excludedKeywords);
+          if (data.theme) setTheme(data.theme);
         }
         setSettingsLoaded(true);
       } catch (err) {
@@ -135,7 +159,8 @@ export default function App() {
           ignoredLocations,
           searchQueries,
           selectedSources,
-          excludedKeywords
+          excludedKeywords,
+          theme
         }, { merge: true });
       } catch (err) {
         console.error("Error syncing settings:", err);
@@ -144,7 +169,7 @@ export default function App() {
 
     const timeoutId = setTimeout(syncSettings, 1000);
     return () => clearTimeout(timeoutId);
-  }, [user, settingsLoaded, ignoredLocations, searchQueries, selectedSources, excludedKeywords]);
+  }, [user, settingsLoaded, ignoredLocations, searchQueries, selectedSources, excludedKeywords, theme]);
 
   // Save to localStorage whenever state changes
   useEffect(() => {
@@ -398,8 +423,8 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center transition-colors">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600 dark:text-blue-400" />
       </div>
     );
   }
@@ -412,52 +437,62 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className={`min-h-screen ${theme === 'dark' ? 'dark' : ''} bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-300`}>
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-40 transition-colors">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="bg-blue-600 p-2 rounded-lg">
+            <div className="bg-blue-600 dark:bg-blue-500 p-2 rounded-lg">
               <Database className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">JobWatch-CH</h1>
+            <h1 className="text-xl font-bold tracking-tight dark:text-white">JobWatch-CH</h1>
           </div>
           
-          {user ? (
-            <div className="flex items-center gap-4">
-              <div className="hidden sm:block text-right">
-                <p className="text-sm font-medium">{user.displayName}</p>
-                <p className="text-xs text-slate-500">{user.email}</p>
-              </div>
-              <button 
-                onClick={handleLogout}
-                className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-600"
-                title="Logout"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
-            </div>
-          ) : (
-            <button 
-              onClick={handleLogin}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-all shadow-sm"
+          <div className="flex items-center gap-2 sm:gap-4">
+            <button
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all"
+              title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
             >
-              <LogIn className="w-4 h-4" />
-              Sign In with Google
+              {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
             </button>
-          )}
+
+            {user ? (
+              <div className="flex items-center gap-4">
+                <div className="hidden sm:block text-right">
+                  <p className="text-sm font-medium dark:text-slate-200">{user.displayName}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{user.email}</p>
+                </div>
+                <button 
+                  onClick={handleLogout}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-600 dark:text-slate-400"
+                  title="Logout"
+                >
+                  <LogOut className="w-5 h-5" />
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={handleLogin}
+                className="flex items-center gap-2 bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-all shadow-sm"
+              >
+                <LogIn className="w-4 h-4" />
+                Sign In with Google
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {!user ? (
-          <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 shadow-sm">
+          <div className="text-center py-20 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
             <div className="max-w-md mx-auto">
-              <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Search className="w-8 h-8 text-blue-600" />
+              <div className="bg-blue-50 dark:bg-blue-900/30 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Search className="w-8 h-8 text-blue-600 dark:text-blue-400" />
               </div>
-              <h2 className="text-2xl font-bold mb-2">Welcome to Swiss AI Jobs</h2>
-              <p className="text-slate-600 mb-8">
+              <h2 className="text-2xl font-bold mb-2 dark:text-white">Welcome to Swiss AI Jobs</h2>
+              <p className="text-slate-600 dark:text-slate-400 mb-8">
                 Sign in to start scraping and tracking AI job opportunities across Switzerland.
               </p>
               <button 
@@ -473,9 +508,9 @@ export default function App() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Sidebar: Controls */}
             <div className="lg:col-span-1 space-y-6">
-              <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Search className="w-5 h-5 text-blue-600" />
+              <section className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 dark:text-white">
+                  <Search className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   Search Queries
                 </h3>
                 
@@ -485,11 +520,11 @@ export default function App() {
                     value={newQuery}
                     onChange={(e) => setNewQuery(e.target.value)}
                     placeholder="e.g. Data Scientist"
-                    className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                    className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all dark:text-slate-100"
                   />
                   <button 
                     type="submit"
-                    className="bg-slate-900 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors"
+                    className="bg-slate-900 dark:bg-slate-700 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-slate-600 transition-colors"
                   >
                     Add
                   </button>
@@ -499,10 +534,10 @@ export default function App() {
                   {searchQueries.map(q => (
                     <span 
                       key={q} 
-                      className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-medium border border-blue-100"
+                      className="inline-flex items-center gap-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-3 py-1 rounded-full text-xs font-medium border border-blue-100 dark:border-blue-800"
                     >
                       {q}
-                      <button onClick={() => removeQuery(q)} className="hover:text-blue-900">
+                      <button onClick={() => removeQuery(q)} className="hover:text-blue-900 dark:hover:text-blue-100">
                         &times;
                       </button>
                     </span>
@@ -512,7 +547,7 @@ export default function App() {
                 <button 
                   onClick={handleScrape}
                   disabled={isScraping || searchQueries.length === 0}
-                  className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white px-6 py-3 rounded-xl font-semibold transition-all shadow-md"
+                  className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white px-6 py-3 rounded-xl font-semibold transition-all shadow-md"
                 >
                   {isScraping ? (
                     <RefreshCw className="w-5 h-5 animate-spin" />
@@ -524,18 +559,18 @@ export default function App() {
               </section>
 
               {/* Job Sources Toggles */}
-              <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Database className="w-5 h-5 text-blue-600" />
+              <section className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 dark:text-white">
+                  <Database className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   Job Sources
                 </h3>
                 <div className="space-y-2">
                   {allAvailableSources.map((source) => (
                     <label 
                       key={source.id}
-                      className="flex items-center justify-between p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors"
+                      className="flex items-center justify-between p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg cursor-pointer transition-colors"
                     >
-                      <span className="text-sm font-medium text-slate-700">{source.label}</span>
+                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{source.label}</span>
                       <div className="relative inline-flex items-center cursor-pointer">
                         <input 
                           type="checkbox" 
@@ -543,7 +578,7 @@ export default function App() {
                           checked={selectedSources.includes(source.id)}
                           onChange={() => toggleSource(source.id)}
                         />
-                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        <div className="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                       </div>
                     </label>
                   ))}
@@ -551,8 +586,8 @@ export default function App() {
               </section>
 
               {/* Excluded Keywords */}
-              <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600">
+              <section className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-rose-600 dark:text-rose-400">
                   <AlertCircle className="w-5 h-5" />
                   Exclude Keywords
                 </h3>
@@ -563,7 +598,7 @@ export default function App() {
                     value={newExcludedKeyword}
                     onChange={(e) => setNewExcludedKeyword(e.target.value)}
                     placeholder="e.g. SAP, Junior"
-                    className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 transition-all"
+                    className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 transition-all dark:text-slate-100"
                   />
                   <button 
                     type="submit"
@@ -577,48 +612,48 @@ export default function App() {
                   {excludedKeywords.map(kw => (
                     <span 
                       key={kw} 
-                      className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 px-3 py-1 rounded-full text-xs font-medium border border-rose-100"
+                      className="inline-flex items-center gap-1 bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 px-3 py-1 rounded-full text-xs font-medium border border-rose-100 dark:border-rose-800"
                     >
                       {kw}
-                      <button onClick={() => removeExcludedKeyword(kw)} className="hover:text-rose-900">
+                      <button onClick={() => removeExcludedKeyword(kw)} className="hover:text-rose-900 dark:hover:text-rose-100">
                         &times;
                       </button>
                     </span>
                   ))}
                   {excludedKeywords.length === 0 && (
-                    <p className="text-xs text-slate-400 italic">No keywords excluded.</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 italic">No keywords excluded.</p>
                   )}
                 </div>
               </section>
 
               {/* Ignored Locations */}
-              <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-600">
-                  <MapPin className="w-5 h-5 text-blue-600" />
+              <section className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-600 dark:text-slate-400">
+                  <MapPin className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   Ignored Locations
                 </h3>
                 <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
                   {ignoredLocations.map(loc => (
                     <span 
                       key={loc} 
-                      className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-medium border border-slate-200"
+                      className="inline-flex items-center gap-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 py-1 rounded-full text-xs font-medium border border-slate-200 dark:border-slate-700"
                     >
                       {loc}
-                      <button onClick={() => toggleLocationIgnore(loc)} className="hover:text-slate-900">
+                      <button onClick={() => toggleLocationIgnore(loc)} className="hover:text-slate-900 dark:hover:text-white">
                         &times;
                       </button>
                     </span>
                   ))}
                   {ignoredLocations.length === 0 && (
-                    <p className="text-xs text-slate-400 italic">No locations ignored. Click a location on a job card to ignore it.</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 italic">No locations ignored.</p>
                   )}
                 </div>
               </section>
 
               {/* Status Filter */}
-              <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                  <Filter className="w-5 h-5 text-blue-600" />
+              <section className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 dark:text-white">
+                  <Filter className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   Filter by Status
                 </h3>
                 <div className="grid grid-cols-2 gap-2">
@@ -628,8 +663,8 @@ export default function App() {
                       onClick={() => setActiveFilter(opt.value)}
                       className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                         activeFilter === opt.value 
-                          ? 'bg-blue-600 text-white shadow-sm' 
-                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                          ? 'bg-blue-600 text-white shadow-md shadow-blue-200 dark:shadow-none' 
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
                       }`}
                     >
                       <opt.icon className="w-4 h-4" />
@@ -646,10 +681,10 @@ export default function App() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95 }}
-                    className={`p-4 rounded-xl border flex gap-3 ${
-                      status.type === 'success' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
-                      status.type === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' :
-                      'bg-blue-50 border-blue-100 text-blue-800'
+                    className={`p-4 rounded-xl border flex gap-3 transition-colors ${
+                      status.type === 'success' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-800 text-emerald-800 dark:text-emerald-400' :
+                      status.type === 'error' ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-100 dark:border-rose-800 text-rose-800 dark:text-rose-400' :
+                      'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800 text-blue-800 dark:text-blue-400'
                     }`}
                   >
                     {status.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0" /> :
@@ -658,7 +693,7 @@ export default function App() {
                     <p className="text-sm font-medium">{status.message}</p>
                     <button 
                       onClick={() => setStatus(null)}
-                      className="ml-auto text-slate-400 hover:text-slate-600"
+                      className="ml-auto text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                     >
                       &times;
                     </button>
@@ -671,13 +706,13 @@ export default function App() {
             <div className="lg:col-span-2 space-y-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-4">
-                  <h3 className="text-lg font-bold">
+                  <h3 className="text-lg font-bold dark:text-white">
                     {activeFilter === 'all' ? 'All Jobs' : `${activeFilter.charAt(0).toUpperCase() + activeFilter.slice(1)} Jobs`} ({filteredJobs.length})
                   </h3>
                   {filteredJobs.length > 0 && (
                     <button
                       onClick={handleExport}
-                      className="flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-all border border-blue-100"
+                      className="flex items-center gap-1.5 text-xs font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 px-3 py-1.5 rounded-lg transition-all border border-blue-100 dark:border-blue-900/50"
                       title="Export displayed jobs to JSON"
                     >
                       <Download className="w-3.5 h-3.5" />
@@ -685,7 +720,7 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                <div className="text-xs text-slate-500 flex items-center gap-1">
+                <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
                   <Calendar className="w-3 h-3" />
                   Last updated: {jobs.length > 0 ? new Date((jobs[0].scrapedAt as any)?.seconds * 1000).toLocaleString() : 'Never'}
                 </div>
@@ -693,8 +728,8 @@ export default function App() {
 
               <div className="space-y-4">
                 {filteredJobs.length === 0 ? (
-                  <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-slate-300">
-                    <p className="text-slate-500">No jobs found matching your criteria.</p>
+                  <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 transition-colors">
+                    <p className="text-slate-500 dark:text-slate-400">No jobs found matching your criteria.</p>
                   </div>
                 ) : (
                   filteredJobs.map((job, idx) => (
@@ -703,7 +738,7 @@ export default function App() {
                         initial={{ opacity: 0, x: 20 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: idx * 0.05 }}
-                        className={`bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group ${
+                        className={`bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md dark:shadow-slate-950/50 transition-all group ${
                           expandedJobId === job.id ? 'ring-2 ring-blue-500 ring-opacity-50' : ''
                         }`}
                       >
@@ -714,21 +749,21 @@ export default function App() {
                         <div className="flex justify-between items-start gap-4">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <h4 className="font-bold text-lg group-hover:text-blue-600 transition-colors leading-tight">
+                              <h4 className="font-bold text-lg group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors leading-tight dark:text-slate-100">
                                 {job.title}
                               </h4>
                               {job.summary && (
                                 <div className="group/summary relative">
-                                  <Sparkles className="w-4 h-4 text-amber-500 fill-amber-50 cursor-help" />
-                                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3.5 bg-slate-900 text-white text-xs rounded-xl shadow-2xl opacity-0 invisible group-hover/summary:opacity-100 group-hover/summary:visible transition-all z-[100] pointer-events-none border border-white/10">
-                                    <div className="font-bold flex items-center gap-1.5 mb-1.5 text-amber-400 border-b border-white/10 pb-1">
+                                  <Sparkles className="w-4 h-4 text-amber-500 fill-amber-50 dark:fill-amber-900/30 cursor-help" />
+                                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 p-3.5 bg-slate-900 dark:bg-slate-800 text-white text-xs rounded-xl shadow-2xl opacity-0 invisible group-hover/summary:opacity-100 group-hover/summary:visible transition-all z-[100] pointer-events-none border border-white/10 dark:border-slate-700">
+                                    <div className="font-bold flex items-center gap-1.5 mb-1.5 text-amber-400 border-b border-white/10 dark:border-slate-700 pb-1">
                                       <Sparkles className="w-3 h-3" />
                                       AI Insights
                                     </div>
                                     <div className="leading-relaxed whitespace-pre-wrap italic opacity-90">
                                       {job.summary}
                                     </div>
-                                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-slate-900"></div>
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-slate-900 dark:border-t-slate-800"></div>
                                   </div>
                                 </div>
                               )}
@@ -739,21 +774,21 @@ export default function App() {
                                     generateSummary(job);
                                   }}
                                   disabled={summarizingIds.has(job.id!)}
-                                  className={`p-1 rounded hover:bg-amber-50 transition-colors ${summarizingIds.has(job.id!) ? 'animate-pulse' : ''}`}
+                                  className={`p-1 rounded hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors ${summarizingIds.has(job.id!) ? 'animate-pulse' : ''}`}
                                   title="Generate AI Summary"
                                 >
-                                  <Sparkles className={`w-4 h-4 ${summarizingIds.has(job.id!) ? 'text-amber-400' : 'text-slate-300 hover:text-amber-500'}`} />
+                                  <Sparkles className={`w-4 h-4 ${summarizingIds.has(job.id!) ? 'text-amber-400' : 'text-slate-300 dark:text-slate-600 hover:text-amber-500 dark:hover:text-amber-400'}`} />
                                 </button>
                               )}
                               {job.status === 'applied' && (
-                                <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                <span className="bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
                                   Applied
                                 </span>
                               )}
                             </div>
-                            <div className="flex flex-wrap gap-y-2 gap-x-4 mt-2 text-sm text-slate-600">
+                            <div className="flex flex-wrap gap-y-2 gap-x-4 mt-2 text-sm text-slate-600 dark:text-slate-400">
                               <div className="flex items-center gap-1.5">
-                                <Building2 className="w-4 h-4 text-slate-400" />
+                                <Building2 className="w-4 h-4 text-slate-400 dark:text-slate-500" />
                                 {job.company}
                               </div>
                               <button 
@@ -761,30 +796,30 @@ export default function App() {
                                   e.stopPropagation();
                                   toggleLocationIgnore(job.location);
                                 }}
-                                className="flex items-center gap-1.5 hover:text-rose-600 transition-colors group/loc"
+                                className="flex items-center gap-1.5 hover:text-rose-600 dark:hover:text-rose-400 transition-colors group/loc"
                                 title="Click to ignore this location"
                               >
-                                <MapPin className="w-4 h-4 text-slate-400 group-hover/loc:text-rose-400" />
-                                <span className="underline decoration-dotted decoration-slate-300 group-hover/loc:decoration-rose-300">
+                                <MapPin className="w-4 h-4 text-slate-400 dark:text-slate-500 group-hover/loc:text-rose-400" />
+                                <span className="underline decoration-dotted decoration-slate-300 dark:decoration-slate-700 group-hover/loc:decoration-rose-300 dark:group-hover/loc:decoration-rose-500">
                                   {job.location || "Switzerland"}
                                 </span>
                               </button>
                               <div className="flex items-center gap-1.5">
-                                <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
+                                <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
                                   {job.source}
                                 </span>
                               </div>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <div className="text-slate-400 group-hover:text-blue-600 transition-colors">
+                            <div className="text-slate-400 dark:text-slate-600 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                               {expandedJobId === job.id ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                             </div>
                             <a 
                               href={job.url} 
                               target="_blank" 
                               rel="noopener noreferrer"
-                              className="p-2 bg-slate-50 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded-lg transition-all"
+                              className="p-2 bg-slate-50 dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg transition-all"
                               title="View Job"
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -802,9 +837,9 @@ export default function App() {
                               transition={{ duration: 0.3, ease: 'easeInOut' }}
                               className="overflow-hidden"
                             >
-                              <div className="mt-4 pt-4 border-t border-slate-100">
-                                <h5 className="text-sm font-bold text-slate-900 mb-2">Job Description</h5>
-                                <p className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">
+                              <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800">
+                                <h5 className="text-sm font-bold text-slate-900 dark:text-slate-200 mb-2">Job Description</h5>
+                                <p className="text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed">
                                   {job.description || "No detailed description available for this snippet. Click the external link to view full details."}
                                 </p>
                               </div>
@@ -813,12 +848,12 @@ export default function App() {
                         </AnimatePresence>
                       </div>
                       
-                      <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between rounded-b-2xl">
+                      <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between rounded-b-2xl transition-colors">
                         <div className="flex gap-2">
                           {job.status !== 'applied' && (
                             <button
                               onClick={() => job.id && updateJobStatus(job.id, 'applied')}
-                              className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-all"
+                              className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 px-3 py-1.5 rounded-lg transition-all"
                             >
                               <Send className="w-3.5 h-3.5" />
                               Mark Applied
@@ -827,7 +862,7 @@ export default function App() {
                           {job.status !== 'discarded' && (
                             <button
                               onClick={() => job.id && updateJobStatus(job.id, 'discarded')}
-                              className="flex items-center gap-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg transition-all"
+                              className="flex items-center gap-1.5 text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 px-3 py-1.5 rounded-lg transition-all"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                               Discard
@@ -836,7 +871,7 @@ export default function App() {
                           {job.status !== 'new' && (
                             <button
                               onClick={() => job.id && updateJobStatus(job.id, 'new')}
-                              className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-all"
+                              className="flex items-center gap-1.5 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 px-3 py-1.5 rounded-lg transition-all"
                             >
                               <Inbox className="w-3.5 h-3.5" />
                               Move to New
@@ -844,10 +879,10 @@ export default function App() {
                           )}
                         </div>
                         <div className="flex flex-col items-end">
-                          <span className="text-[10px] text-slate-400 uppercase font-medium">
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500 uppercase font-medium">
                             Query: {job.query}
                           </span>
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500">
                             Scraped {new Date((job.scrapedAt as any)?.seconds * 1000).toLocaleDateString()}
                           </span>
                         </div>
@@ -860,7 +895,7 @@ export default function App() {
                   <div className="pt-4 flex justify-center">
                     <button
                       onClick={() => setPageSize(prev => prev + 10)}
-                      className="flex items-center gap-2 bg-white border border-slate-200 px-6 py-2 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-sm"
+                      className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-6 py-2 rounded-xl text-sm font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700 transition-all shadow-sm"
                     >
                       <RefreshCw className="w-4 h-4" />
                       Load More Jobs
