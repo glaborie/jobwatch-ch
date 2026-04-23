@@ -4,6 +4,7 @@ import path from "path";
 import axios from "axios";
 import * as cheerio from "cheerio";
 import cors from "cors";
+import { rateLimit } from 'express-rate-limit';
 
 // Note: Scraping major sites like LinkedIn/Indeed usually requires headers to avoid being blocked.
 const HEADERS = {
@@ -34,13 +35,23 @@ async function startServer() {
 
   app.use(cors());
   app.use(express.json());
+  app.set('trust proxy', 1);
+
+  // Rate Limiting
+  const scrapeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // Limit each IP to 10 requests per windowMs
+    message: { error: "Too many scraping requests. Please try again in 15 minutes." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
 
   // API Routes
   app.get("/api/version", (req, res) => {
     res.json({ version: "1.0.1", buildTime: new Date().toISOString() });
   });
 
-  app.post("/api/scrape", async (req, res) => {
+  app.post("/api/scrape", scrapeLimiter, async (req, res) => {
     const { queries, sources } = req.body;
     if (!queries || !Array.isArray(queries)) {
       return res.status(400).json({ error: "Queries array is required" });
