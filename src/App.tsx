@@ -558,6 +558,33 @@ export default function App() {
                 </button>
               </section>
 
+              {/* Status Messages */}
+              <AnimatePresence>
+                {status && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className={`p-4 rounded-xl border flex gap-3 transition-colors ${
+                      status.type === 'success' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-800 text-emerald-800 dark:text-emerald-400' :
+                      status.type === 'error' ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-100 dark:border-rose-800 text-rose-800 dark:text-rose-400' :
+                      'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800 text-blue-800 dark:text-blue-400'
+                    }`}
+                  >
+                    {status.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0" /> :
+                     status.type === 'error' ? <AlertCircle className="w-5 h-5 shrink-0" /> :
+                     <Loader2 className="w-5 h-5 shrink-0 animate-spin" />}
+                    <p className="text-sm font-medium">{status.message}</p>
+                    <button 
+                      onClick={() => setStatus(null)}
+                      className="ml-auto text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    >
+                      &times;
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {/* Job Sources Toggles */}
               <section className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2 dark:text-white">
@@ -673,33 +700,6 @@ export default function App() {
                   ))}
                 </div>
               </section>
-
-              {/* Status Messages */}
-              <AnimatePresence>
-                {status && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className={`p-4 rounded-xl border flex gap-3 transition-colors ${
-                      status.type === 'success' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-800 text-emerald-800 dark:text-emerald-400' :
-                      status.type === 'error' ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-100 dark:border-rose-800 text-rose-800 dark:text-rose-400' :
-                      'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800 text-blue-800 dark:text-blue-400'
-                    }`}
-                  >
-                    {status.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0" /> :
-                     status.type === 'error' ? <AlertCircle className="w-5 h-5 shrink-0" /> :
-                     <Loader2 className="w-5 h-5 shrink-0 animate-spin" />}
-                    <p className="text-sm font-medium">{status.message}</p>
-                    <button 
-                      onClick={() => setStatus(null)}
-                      className="ml-auto text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                    >
-                      &times;
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
 
             {/* Main Content: Job List */}
