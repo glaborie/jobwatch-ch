@@ -45,9 +45,10 @@ import {
   doc,
   limit,
   getDoc,
-  setDoc
+  setDoc,
+  deleteDoc
 } from 'firebase/firestore';
-import { auth, db, ai } from './firebase';
+import { auth, db, ai, legacyDb } from './firebase';
 
 type JobStatus = 'new' | 'discarded' | 'applied';
 
@@ -63,6 +64,52 @@ interface Job {
   scrapedAt: Timestamp | string;
   query: string;
   status: JobStatus;
+}
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+  }
+}
+
+function isQuotaError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Quota exceeded") || message.includes("quota metric");
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const message = error instanceof Error ? error.message : String(error);
+  const errInfo: FirestoreErrorInfo = {
+    error: message,
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+    },
+    operationType,
+    path
+  };
+  
+  const jsonError = JSON.stringify(errInfo);
+  console.error('Firestore Error: ', jsonError);
+  
+  // Create a proper error object with the JSON message as required
+  const newError = new Error(jsonError);
+  throw newError;
 }
 
 export default function App() {
@@ -97,6 +144,9 @@ export default function App() {
   });
   const [summarizingIds, setSummarizingIds] = useState<Set<string>>(new Set());
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [legacyJobsCount, setLegacyJobsCount] = useState(0);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       const saved = localStorage.getItem('theme');
@@ -127,6 +177,7 @@ export default function App() {
     }
 
     const loadSettings = async () => {
+      const settingsPath = `users/${user.uid}/settings/preferences`;
       try {
         const settingsRef = doc(db, 'users', user.uid, 'settings', 'preferences');
         const settingsSnap = await getDoc(settingsRef);
@@ -141,11 +192,120 @@ export default function App() {
         }
         setSettingsLoaded(true);
       } catch (err) {
-        console.error("Error loading settings:", err);
+        if (isQuotaError(err)) {
+          setIsQuotaExceeded(true);
+          setStatus({ 
+            type: 'error', 
+            message: "Daily Firestore quota exceeded. Limit will reset tomorrow (Pacific Time). Some settings may not load." 
+          });
+        } else {
+          try {
+            handleFirestoreError(err, OperationType.GET, settingsPath);
+          } catch (e) {
+            console.error("Settings load failed", e);
+          }
+        }
       }
     };
 
     loadSettings();
+  }, [user]);
+
+  const migrateLegacyJobs = async () => {
+    if (!user || isMigrating) return;
+    setIsMigrating(true);
+    setStatus({ type: 'info', message: "Migrating legacy jobs..." });
+
+    try {
+      const userJobsRef = collection(db, "users", user.uid, "jobs");
+      let migratedCount = 0;
+
+      // Helper to process a snapshot
+      const processSnap = async (snap: any, sourceDb: any) => {
+        for (const legacyDoc of snap.docs) {
+          const data = legacyDoc.data();
+          const existingQ = query(userJobsRef, where("url", "==", data.url));
+          const existingSnap = await getDocs(existingQ);
+          
+          if (existingSnap.empty) {
+            await addDoc(userJobsRef, {
+              ...data,
+              scrapedAt: data.scrapedAt || serverTimestamp()
+            });
+            migratedCount++;
+          }
+          
+          // Cleanup
+          try {
+            await deleteDoc(doc(sourceDb, "jobs", legacyDoc.id));
+          } catch (e) {
+            if (isQuotaError(e)) {
+              setIsQuotaExceeded(true);
+              throw e; // Break the loop
+            }
+            console.warn("[Migration] Could not delete legacy doc:", legacyDoc.id);
+          }
+        }
+      };
+
+      // Migrate from default db
+      const snapLegacy = await getDocs(query(collection(legacyDb, "jobs")));
+      await processSnap(snapLegacy, legacyDb);
+
+      // Migrate from current db top-level
+      const snapCurrent = await getDocs(query(collection(db, "jobs")));
+      await processSnap(snapCurrent, db);
+
+      setLegacyJobsCount(0);
+      setStatus({ type: 'success', message: `Successfully migrated ${migratedCount} legacy jobs.` });
+    } catch (err) {
+      if (isQuotaError(err)) {
+        setIsQuotaExceeded(true);
+        setStatus({ type: 'error', message: "Migration failed due to Firestore quota. Limit resets tomorrow." });
+      } else {
+        console.error("Migration error:", err);
+        setStatus({ type: 'error', message: "Migration failed. Please try again." });
+      }
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  // Check for legacy jobs
+  useEffect(() => {
+    if (!user) return;
+
+    const checkLegacy = async () => {
+      if (!user) return;
+      console.log(`[Migration] Checking for legacy jobs for ${user.email}...`);
+      try {
+        // Check legacyDb (default)
+        const qLegacy = query(collection(legacyDb, "jobs"), limit(50));
+        const snapLegacy = await getDocs(qLegacy);
+        console.log(`[Migration] Found ${snapLegacy.size} jobs in legacyDb (default)`);
+        
+        // Check current db top-level
+        const qCurrent = query(collection(db, "jobs"), limit(50));
+        const snapCurrent = await getDocs(qCurrent);
+        console.log(`[Migration] Found ${snapCurrent.size} jobs in current db (top-level)`);
+
+        const total = snapLegacy.size + snapCurrent.size;
+        setLegacyJobsCount(total);
+        
+        // Auto-trigger for specific user if needed or requested
+        if (total > 0 && user.email === 'glaborie@gmail.com') {
+          console.log("[Migration] Auto-triggering migration for glaborie@gmail.com...");
+          migrateLegacyJobs();
+        }
+      } catch (err) {
+        if (isQuotaError(err)) {
+          setIsQuotaExceeded(true);
+        }
+        console.warn("[Migration] Error checking legacy jobs:", err);
+      }
+    };
+
+    checkLegacy();
   }, [user]);
 
   // Sync settings to Firestore
@@ -153,6 +313,7 @@ export default function App() {
     if (!user || !settingsLoaded) return;
 
     const syncSettings = async () => {
+      const settingsPath = `users/${user.uid}/settings/preferences`;
       try {
         const settingsRef = doc(db, 'users', user.uid, 'settings', 'preferences');
         await setDoc(settingsRef, {
@@ -163,7 +324,15 @@ export default function App() {
           theme
         }, { merge: true });
       } catch (err) {
-        console.error("Error syncing settings:", err);
+        if (isQuotaError(err)) {
+          setIsQuotaExceeded(true);
+        } else {
+          try {
+            handleFirestoreError(err, OperationType.WRITE, settingsPath);
+          } catch (e) {
+            console.error("Settings sync failed", e);
+          }
+        }
       }
     };
 
@@ -211,15 +380,16 @@ export default function App() {
       return;
     }
 
+    const jobsPath = `users/${user.uid}/jobs`;
     let q = query(
-      collection(db, "jobs"), 
+      collection(db, "users", user.uid, "jobs"), 
       orderBy("scrapedAt", "desc"),
       limit(pageSize)
     );
     
     if (activeFilter !== 'all') {
       q = query(
-        collection(db, "jobs"), 
+        collection(db, "users", user.uid, "jobs"), 
         where("status", "==", activeFilter), 
         orderBy("scrapedAt", "desc"),
         limit(pageSize)
@@ -234,8 +404,19 @@ export default function App() {
       setJobs(jobsData);
       setHasMore(snapshot.docs.length === pageSize);
     }, (error) => {
-      console.error("Firestore error:", error);
-      setStatus({ type: 'error', message: "Failed to load jobs. Check security rules." });
+      if (isQuotaError(error)) {
+        setIsQuotaExceeded(true);
+        setStatus({ 
+          type: 'error', 
+          message: "Daily Firestore quota exceeded. Job list sync paused. Limit resets tomorrow." 
+        });
+      } else {
+        try {
+          handleFirestoreError(error, OperationType.LIST, jobsPath);
+        } catch (e) {
+          console.error("Job list sync failed", e);
+        }
+      }
     });
 
     return () => unsubscribe();
@@ -280,17 +461,27 @@ export default function App() {
       let addedCount = 0;
 
       // Add to Firestore
+      const jobsColRef = collection(db, "users", user.uid, "jobs");
       for (const job of scrapedJobs) {
-        // Check if job already exists (simple check by URL)
-        const q = query(collection(db, "jobs"), where("url", "==", job.url));
-        const existing = await getDocs(q);
+        // Check if job already exists (simple check by URL in user list)
+        const q = query(jobsColRef, where("url", "==", job.url));
+        const existingDocs = await getDocs(q);
         
-        if (existing.empty) {
-          await addDoc(collection(db, "jobs"), {
-            ...job,
-            scrapedAt: serverTimestamp()
-          });
-          addedCount++;
+        if (existingDocs.empty) {
+            try {
+              await addDoc(jobsColRef, {
+                ...job,
+                scrapedAt: serverTimestamp()
+              });
+              addedCount++;
+            } catch (err) {
+              if (isQuotaError(err)) {
+                setIsQuotaExceeded(true);
+                setStatus({ type: 'error', message: "Firestore quota exceeded. Some scraped jobs were not saved." });
+                break; // Stop trying to add jobs
+              }
+              handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}/jobs`);
+            }
         }
       }
 
@@ -307,17 +498,28 @@ export default function App() {
   };
 
   const updateJobStatus = async (jobId: string, newStatus: JobStatus) => {
+    if (!user) return;
+    const jobPath = `users/${user.uid}/jobs/${jobId}`;
     try {
-      const jobRef = doc(db, "jobs", jobId);
+      const jobRef = doc(db, "users", user.uid, "jobs", jobId);
       await updateDoc(jobRef, { status: newStatus });
     } catch (error) {
-      console.error("Update status error:", error);
-      setStatus({ type: 'error', message: "Failed to update job status." });
+      if (isQuotaError(error)) {
+        setIsQuotaExceeded(true);
+        setStatus({ type: 'error', message: "Firestore quota exceeded. Status update failed." });
+      } else {
+        try {
+          handleFirestoreError(error, OperationType.UPDATE, jobPath);
+        } catch (e) {
+          console.error("Job status update failed", e);
+        }
+      }
     }
   };
 
   const generateSummary = async (job: Job) => {
-    if (!job.id || job.summary || summarizingIds.has(job.id)) return;
+    if (!user || !job.id || job.summary || summarizingIds.has(job.id)) return;
+    const jobPath = `users/${user.uid}/jobs/${job.id}`;
     
     setSummarizingIds(prev => new Set(prev).add(job.id!));
     
@@ -335,10 +537,16 @@ export default function App() {
 
       const summary = response.text || "Summary generation failed.";
       
-      const jobRef = doc(db, "jobs", job.id);
+      const jobRef = doc(db, "users", user.uid, "jobs", job.id);
       await updateDoc(jobRef, { summary });
     } catch (error) {
-      console.error("Gemini summary error:", error);
+      if (isQuotaError(error)) {
+        setIsQuotaExceeded(true);
+        setStatus({ type: 'error', message: "Firestore quota exceeded. Could not save summary." });
+      } else {
+        console.error("Gemini summary error:", error);
+        setStatus({ type: 'error', message: "Failed to generate job summary." });
+      }
     } finally {
       setSummarizingIds(prev => {
         const next = new Set(prev);
@@ -554,7 +762,7 @@ export default function App() {
                   ) : (
                     <RefreshCw className="w-5 h-5" />
                   )}
-                  {isScraping ? "Scraping..." : "Start Scraper"}
+                  {isScraping ? "Searching..." : "Start Search"}
                 </button>
               </section>
 
@@ -704,6 +912,74 @@ export default function App() {
 
             {/* Main Content: Job List */}
             <div className="lg:col-span-2 space-y-4">
+              <AnimatePresence>
+                {isQuotaExceeded && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-6 mb-6"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="bg-red-100 dark:bg-red-800 p-2 rounded-full">
+                        <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-lg font-bold text-red-900 dark:text-red-300 mb-1">
+                          Firestore Quota Exceeded
+                        </h4>
+                        <p className="text-red-700 dark:text-red-400 text-sm mb-4">
+                          You've reached the daily free tier limit for database operations. Your data is safe, but you won't be able to save changes or load new jobs until the limit resets.
+                        </p>
+                        <div className="flex items-center gap-4">
+                          <a 
+                            href="https://firebase.google.com/pricing#cloud-firestore" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-red-600 dark:text-red-400 text-sm font-bold flex items-center gap-1 hover:underline"
+                          >
+                            View Quota Details <ExternalLink className="w-3 h-3" />
+                          </a>
+                          <span className="text-red-400 dark:text-red-600 px-2 py-1 bg-red-100 dark:bg-red-950 rounded text-xs font-mono">
+                            Resets Daily ~00:00 Pacific Time
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {legacyJobsCount > 0 && user && !isQuotaExceeded && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl p-6 mb-6"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="bg-amber-100 dark:bg-amber-800 p-2 rounded-full">
+                        <Database className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-lg font-bold text-amber-900 dark:text-amber-300 mb-1">
+                          Legacy Data Detected
+                        </h4>
+                        <p className="text-amber-700 dark:text-amber-400 text-sm mb-4">
+                          We found {legacyJobsCount}+ jobs in the old database structure. Migrating them will move them to your private space so you don't lose your tracking history.
+                        </p>
+                        <button
+                          onClick={migrateLegacyJobs}
+                          disabled={isMigrating}
+                          className="bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white px-6 py-2 rounded-xl font-bold transition-all shadow-sm flex items-center gap-2"
+                        >
+                          {isMigrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                          Migrate Data Now
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-4">
                   <h3 className="text-lg font-bold dark:text-white">

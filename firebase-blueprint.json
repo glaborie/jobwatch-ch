@@ -32,9 +32,9 @@
     }
   },
   "firestore": {
-    "/jobs/{jobId}": {
+    "/users/{userId}/jobs/{jobId}": {
       "schema": "Job",
-      "description": "Collection of scraped job postings."
+      "description": "Collection of job postings tracked by a specific user."
     },
     "/users/{userId}/settings/preferences": {
       "schema": "UserSettings",

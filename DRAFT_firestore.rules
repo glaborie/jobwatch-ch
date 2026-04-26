@@ -6,7 +6,7 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Reuseable hardened global helpers
+    // Phase 3: Primitive Definition
     function isSignedIn() { return request.auth != null; }
     function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
@@ -17,7 +17,7 @@ service cloud.firestore {
     // Validation Blueprint: Job
     function isValidJob(data) {
       return data.keys().hasAll(['title', 'company', 'url', 'source', 'scrapedAt', 'status'])
-        && (data.keys().size() >= 6 && data.keys().size() <= 10)
+        && (data.keys().size() >= 6 && data.keys().size() <= 10) // title, company, url, source, scrapedAt, status, description, location, query, summary
         && data.title is string && data.title.size() <= 500
         && data.company is string && data.company.size() <= 500
         && data.url is string && data.url.size() <= 2048
@@ -31,10 +31,10 @@ service cloud.firestore {
 
     // Validation Blueprint: UserSettings
     function isValidSettings(data) {
-      return (data.get('ignoredLocations', []) is list && data.get('ignoredLocations', []).size() <= 100)
-        && (data.get('searchQueries', []) is list && data.get('searchQueries', []).size() <= 50)
-        && (data.get('selectedSources', []) is list && data.get('selectedSources', []).size() <= 20)
-        && (data.get('excludedKeywords', []) is list && data.get('excludedKeywords', []).size() <= 100)
+      return data.get('ignoredLocations', []) is list
+        && data.get('searchQueries', []) is list
+        && data.get('selectedSources', []) is list
+        && data.get('excludedKeywords', []) is list
         && (data.get('theme', 'light') in ['light', 'dark']);
     }
 
@@ -48,26 +48,23 @@ service cloud.firestore {
 
       // User Jobs
       match /jobs/{jobId} {
+        // Secure List Queries (Pillar 8): Implicitly restricted by path variable userId == request.auth.uid
         allow list: if isOwner(userId);
         allow get: if isOwner(userId) && isValidId(jobId);
 
         allow create: if isVerified() && isOwner(userId) && isValidId(jobId) && isValidJob(incoming());
 
         allow update: if isVerified() && isOwner(userId) && isValidId(jobId) && isValidJob(incoming()) && (
-          // Action: Update Status or Summary (Pillar 4)
-          incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['summary']) ||
-          // Immutable protection check (Pillar 9) - though covered by hasOnly mostly
-          (incoming().url == existing().url && incoming().source == existing().source)
+          // Action: Update Status
+          (incoming().diff(existing()).affectedKeys().hasOnly(['status'])) ||
+          // Action: AI Summary
+          (incoming().diff(existing()).affectedKeys().hasOnly(['summary'])) ||
+          // Action: Full Scraper Update (if needed, but usually we don't re-create)
+          (incoming().diff(existing()).affectedKeys().hasOnly(['title', 'company', 'url', 'source', 'scrapedAt', 'description', 'location', 'query', 'status', 'summary']))
         );
 
-        allow delete: if isOwner(userId);
+        allow delete: if isOwner(userId); // Users can delete their own job tracking records
       }
-    }
-
-    // Temporary rule for migration of legacy data
-    match /jobs/{jobId} {
-      allow read, list, get, delete: if isSignedIn();
     }
   }
 }
