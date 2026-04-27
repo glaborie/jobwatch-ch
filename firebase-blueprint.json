@@ -12,6 +12,7 @@
         "source": { "type": "string", "description": "The source job board (e.g., LinkedIn, Indeed)." },
         "description": { "type": "string", "description": "A brief description or snippet of the job." },
         "scrapedAt": { "type": "string", "format": "date-time", "description": "When the job was scraped." },
+        "publishedAt": { "type": "string", "format": "date-time", "description": "When the job was published." },
         "query": { "type": "string", "description": "The search query used to find this job." },
         "status": { "type": "string", "enum": ["new", "discarded", "applied"], "description": "The current status of the job application." },
         "summary": { "type": "string", "description": "An AI-generated summary of the job description." }

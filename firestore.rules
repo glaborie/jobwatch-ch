@@ -17,12 +17,14 @@ service cloud.firestore {
     // Validation Blueprint: Job
     function isValidJob(data) {
       return data.keys().hasAll(['title', 'company', 'url', 'source', 'scrapedAt', 'status'])
-        && (data.keys().size() >= 6 && data.keys().size() <= 10)
+        && (data.keys().size() >= 6 && data.keys().size() <= 11)
         && data.title is string && data.title.size() <= 500
         && data.company is string && data.company.size() <= 500
         && data.url is string && data.url.size() <= 2048
         && data.source is string && data.source.size() <= 100
         && data.status in ['new', 'applied', 'discarded']
+        && data.scrapedAt is timestamp
+        && (data.get('publishedAt', null) == null || data.publishedAt is timestamp)
         && (data.get('description', '') is string && data.get('description', '').size() <= 6000)
         && (data.get('location', '') is string && data.get('location', '').size() <= 200)
         && (data.get('query', '') is string && data.get('query', '').size() <= 200)

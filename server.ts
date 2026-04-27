@@ -91,6 +91,7 @@ async function startServer() {
                   source: "jobs.ch",
                   query,
                   scrapedAt: new Date().toISOString(),
+                  publishedAt: new Date().toISOString(), // Use current for now or try extraction
                   status: "new"
                 });
               }
@@ -127,6 +128,7 @@ async function startServer() {
                   source: "ictjobs.ch",
                   query,
                   scrapedAt: new Date().toISOString(),
+                  publishedAt: new Date().toISOString(),
                   status: "new"
                 });
               }
@@ -159,6 +161,7 @@ async function startServer() {
                   source: "LinkedIn",
                   query,
                   scrapedAt: new Date().toISOString(),
+                  publishedAt: new Date().toISOString(),
                   status: "new"
                 });
               }
@@ -194,6 +197,7 @@ async function startServer() {
                   source: "jobup.ch",
                   query,
                   scrapedAt: new Date().toISOString(),
+                  publishedAt: new Date().toISOString(),
                   status: "new"
                 });
               }
@@ -233,6 +237,7 @@ async function startServer() {
                   source: "Indeed",
                   query,
                   scrapedAt: new Date().toISOString(),
+                  publishedAt: new Date().toISOString(),
                   status: "new"
                 });
               }
@@ -266,6 +271,7 @@ async function startServer() {
                   source: "SwissDevJobs",
                   query,
                   scrapedAt: new Date().toISOString(),
+                  publishedAt: new Date().toISOString(),
                   status: "new"
                 });
               }

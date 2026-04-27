@@ -62,6 +62,7 @@ interface Job {
   description?: string;
   summary?: string;
   scrapedAt: Timestamp | string;
+  publishedAt?: Timestamp | string;
   query: string;
   status: JobStatus;
 }
@@ -147,6 +148,14 @@ export default function App() {
   const [legacyJobsCount, setLegacyJobsCount] = useState(0);
   const [isMigrating, setIsMigrating] = useState(false);
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState<'pending' | 'checking' | 'done'>(() => {
+    try {
+      const saved = localStorage.getItem(`migration_status_${auth.currentUser?.uid || 'anon'}`);
+      return (saved as any) || 'pending';
+    } catch (e) {
+      return 'pending';
+    }
+  });
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       const saved = localStorage.getItem('theme');
@@ -220,51 +229,91 @@ export default function App() {
       const userJobsRef = collection(db, "users", user.uid, "jobs");
       let migratedCount = 0;
 
+      // Optimization: Fetch all existing job URLs for this user in one go to avoid sub-queries
+      const existingJobsSnap = await getDocs(query(userJobsRef, limit(1000)));
+      const existingUrls = new Set(existingJobsSnap.docs.map(d => d.data().url));
+
       // Helper to process a snapshot
-      const processSnap = async (snap: any, sourceDb: any) => {
+      const processSnap = async (snap: any, sourceDb: any, label: string) => {
+        console.log(`[Migration] Processing ${snap.size} docs from ${label}...`);
         for (const legacyDoc of snap.docs) {
           const data = legacyDoc.data();
-          const existingQ = query(userJobsRef, where("url", "==", data.url));
-          const existingSnap = await getDocs(existingQ);
           
-          if (existingSnap.empty) {
-            await addDoc(userJobsRef, {
-              ...data,
-              scrapedAt: data.scrapedAt || serverTimestamp()
-            });
+          if (!existingUrls.has(data.url)) {
+            const normalizedData = { 
+              title: data.title || "Untitled Job",
+              company: data.company || "Unknown Company",
+              url: data.url || "",
+              source: data.source || "Legacy",
+              status: data.status || "new",
+              ...data 
+            };
+            
+            // Normalize scrapedAt
+            if (typeof data.scrapedAt === 'string') {
+              normalizedData.scrapedAt = new Date(data.scrapedAt);
+            } else if (!data.scrapedAt) {
+              normalizedData.scrapedAt = serverTimestamp();
+            }
+
+            // Normalize publishedAt
+            if (typeof data.publishedAt === 'string') {
+              normalizedData.publishedAt = new Date(data.publishedAt);
+            }
+            
+            await addDoc(userJobsRef, normalizedData);
             migratedCount++;
+            existingUrls.add(data.url); // Add to local set to prevent dupes within the same run
           }
           
           // Cleanup
           try {
             await deleteDoc(doc(sourceDb, "jobs", legacyDoc.id));
           } catch (e) {
-            if (isQuotaError(e)) {
-              setIsQuotaExceeded(true);
-              throw e; // Break the loop
-            }
-            console.warn("[Migration] Could not delete legacy doc:", legacyDoc.id);
+            console.warn(`[Migration] Could not delete legacy doc ${legacyDoc.id} from ${label}:`, e);
           }
         }
       };
 
       // Migrate from default db
-      const snapLegacy = await getDocs(query(collection(legacyDb, "jobs")));
-      await processSnap(snapLegacy, legacyDb);
+      let snapLegacy;
+      try {
+        console.log("[Migration] Attempting to fetch from legacyDb (default)...");
+        snapLegacy = await getDocs(query(collection(legacyDb, "jobs")));
+        await processSnap(snapLegacy, legacyDb, "legacy (default)");
+      } catch (err: any) {
+        console.error("[Migration] Error reading legacyDb:", err);
+        // If it's a permission error on legacyDb, we might still want to try the current DB top-level
+        if (!err.message?.includes("permission")) {
+          throw err;
+        }
+      }
 
       // Migrate from current db top-level
-      const snapCurrent = await getDocs(query(collection(db, "jobs")));
-      await processSnap(snapCurrent, db);
+      let snapCurrent;
+      try {
+        console.log("[Migration] Attempting to fetch from current db top-level...");
+        snapCurrent = await getDocs(query(collection(db, "jobs")));
+        await processSnap(snapCurrent, db, "current (top-level)");
+      } catch (err: any) {
+        console.error("[Migration] Error reading current db top-level:", err);
+        throw err;
+      }
 
       setLegacyJobsCount(0);
+      setMigrationStatus('done');
+      localStorage.setItem(`migration_status_${user.uid}`, 'done');
       setStatus({ type: 'success', message: `Successfully migrated ${migratedCount} legacy jobs.` });
-    } catch (err) {
+    } catch (err: any) {
       if (isQuotaError(err)) {
         setIsQuotaExceeded(true);
         setStatus({ type: 'error', message: "Migration failed due to Firestore quota. Limit resets tomorrow." });
       } else {
         console.error("Migration error:", err);
-        setStatus({ type: 'error', message: "Migration failed. Please try again." });
+        setStatus({ 
+          type: 'error', 
+          message: `Migration failed: ${err.message || "Unknown error"}. Check console for details.` 
+        });
       }
     } finally {
       setIsMigrating(false);
@@ -273,10 +322,13 @@ export default function App() {
 
   // Check for legacy jobs
   useEffect(() => {
-    if (!user) return;
+    if (!user || migrationStatus === 'done') return;
 
     const checkLegacy = async () => {
       if (!user) return;
+      if (migrationStatus === 'checking') return;
+      
+      setMigrationStatus('checking');
       console.log(`[Migration] Checking for legacy jobs for ${user.email}...`);
       try {
         // Check legacyDb (default)
@@ -292,6 +344,13 @@ export default function App() {
         const total = snapLegacy.size + snapCurrent.size;
         setLegacyJobsCount(total);
         
+        if (total === 0) {
+          setMigrationStatus('done');
+          localStorage.setItem(`migration_status_${user.uid}`, 'done');
+        } else {
+          setMigrationStatus('pending'); // Still something to migrate
+        }
+
         // Auto-trigger for specific user if needed or requested
         if (total > 0 && user.email === 'glaborie@gmail.com') {
           console.log("[Migration] Auto-triggering migration for glaborie@gmail.com...");
@@ -301,12 +360,13 @@ export default function App() {
         if (isQuotaError(err)) {
           setIsQuotaExceeded(true);
         }
+        setMigrationStatus('pending'); // Retry later
         console.warn("[Migration] Error checking legacy jobs:", err);
       }
     };
 
     checkLegacy();
-  }, [user]);
+  }, [user, migrationStatus]);
 
   // Sync settings to Firestore
   useEffect(() => {
@@ -381,34 +441,28 @@ export default function App() {
     }
 
     const jobsPath = `users/${user.uid}/jobs`;
-    let q = query(
+    
+    // Fetch all jobs for this user (up to 2000 to keep it manageable but comprehensive)
+    // Client-side filtering will handle status to save reads when switching filters
+    const q = query(
       collection(db, "users", user.uid, "jobs"), 
       orderBy("scrapedAt", "desc"),
-      limit(pageSize)
+      limit(2000)
     );
     
-    if (activeFilter !== 'all') {
-      q = query(
-        collection(db, "users", user.uid, "jobs"), 
-        where("status", "==", activeFilter), 
-        orderBy("scrapedAt", "desc"),
-        limit(pageSize)
-      );
-    }
-
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const jobsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Job[];
       setJobs(jobsData);
-      setHasMore(snapshot.docs.length === pageSize);
+      setHasMore(false); // We fetch everything up to 2000 now
     }, (error) => {
       if (isQuotaError(error)) {
         setIsQuotaExceeded(true);
         setStatus({ 
           type: 'error', 
-          message: "Daily Firestore quota exceeded. Job list sync paused. Limit resets tomorrow." 
+          message: "Daily Firestore quota exceeded. View sync paused. Limit resets tomorrow." 
         });
       } else {
         try {
@@ -420,7 +474,7 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [user, activeFilter, pageSize]);
+  }, [user]);
 
   // Reset pagination when filter changes
   useEffect(() => {
@@ -462,18 +516,26 @@ export default function App() {
 
       // Add to Firestore
       const jobsColRef = collection(db, "users", user.uid, "jobs");
+      
+      // Optimization: Reuse the existing jobs list to avoid unnecessary reads
+      const existingUrls = new Set(jobs.map(j => j.url));
+      
+      // If our memory list is small, fetch a bit more just in case
+      if (jobs.length < 500) {
+        const extraSnap = await getDocs(query(jobsColRef, limit(1000)));
+        extraSnap.docs.forEach(d => existingUrls.add(d.data().url));
+      }
+
       for (const job of scrapedJobs) {
-        // Check if job already exists (simple check by URL in user list)
-        const q = query(jobsColRef, where("url", "==", job.url));
-        const existingDocs = await getDocs(q);
-        
-        if (existingDocs.empty) {
+        if (!existingUrls.has(job.url)) {
             try {
               await addDoc(jobsColRef, {
                 ...job,
+                publishedAt: job.publishedAt ? new Date(job.publishedAt) : null,
                 scrapedAt: serverTimestamp()
               });
               addedCount++;
+              existingUrls.add(job.url);
             } catch (err) {
               if (isQuotaError(err)) {
                 setIsQuotaExceeded(true);
@@ -618,6 +680,9 @@ export default function App() {
   };
 
   const filteredJobs = jobs.filter(job => {
+    // Status filter (now handled client-side to save reads)
+    if (activeFilter !== 'all' && job.status !== activeFilter) return false;
+
     // Keyword filter
     const searchStr = `${job.title} ${job.company} ${job.description || ''}`.toLowerCase();
     const hasExcludedKeyword = excludedKeywords.some(kw => searchStr.includes(kw.toLowerCase()));
@@ -628,6 +693,9 @@ export default function App() {
 
     return !hasExcludedKeyword && !isIgnoredLocation;
   });
+
+  const displayJobs = filteredJobs.slice(0, pageSize);
+  const canLoadMore = filteredJobs.length > pageSize;
 
   if (loading) {
     return (
@@ -980,7 +1048,7 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-4">
                   <h3 className="text-lg font-bold dark:text-white">
                     {activeFilter === 'all' ? 'All Jobs' : `${activeFilter.charAt(0).toUpperCase() + activeFilter.slice(1)} Jobs`} ({filteredJobs.length})
@@ -1003,12 +1071,12 @@ export default function App() {
               </div>
 
               <div className="space-y-4">
-                {filteredJobs.length === 0 ? (
+                {displayJobs.length === 0 ? (
                   <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 transition-colors">
                     <p className="text-slate-500 dark:text-slate-400">No jobs found matching your criteria.</p>
                   </div>
                 ) : (
-                  filteredJobs.map((job, idx) => (
+                  displayJobs.map((job, idx) => (
                       <motion.div 
                         key={job.id || idx}
                         initial={{ opacity: 0, x: 20 }}
@@ -1085,6 +1153,17 @@ export default function App() {
                                   {job.source}
                                 </span>
                               </div>
+                              {job.publishedAt && (
+                                <div className="flex items-center gap-1.5" title="Published date">
+                                  <Calendar className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                                  <span className="text-[10px] font-medium uppercase tracking-tight">
+                                    {(() => {
+                                      const d = (job.publishedAt as any)?.seconds ? new Date((job.publishedAt as any).seconds * 1000) : new Date(job.publishedAt as any);
+                                      return isNaN(d.getTime()) ? 'Recently' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                                    })()}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1167,14 +1246,14 @@ export default function App() {
                   ))
                 )}
 
-                {jobs.length > 0 && hasMore && (
+                {canLoadMore && (
                   <div className="pt-4 flex justify-center">
                     <button
-                      onClick={() => setPageSize(prev => prev + 10)}
+                      onClick={() => setPageSize(prev => prev + 20)}
                       className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-6 py-2 rounded-xl text-sm font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700 transition-all shadow-sm"
                     >
                       <RefreshCw className="w-4 h-4" />
-                      Load More Jobs
+                      Show More Jobs ({filteredJobs.length - displayJobs.length} remaining)
                     </button>
                   </div>
                 )}
