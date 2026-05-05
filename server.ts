@@ -8,22 +8,30 @@ import { rateLimit } from 'express-rate-limit';
 
 // Note: Scraping major sites like LinkedIn/Indeed usually requires headers to avoid being blocked.
 const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Language": "en-US,en;q=0.9,de-CH;q=0.8,de;q=0.7",
   "Accept-Encoding": "gzip, deflate, br",
   "DNT": "1",
   "Connection": "keep-alive",
   "Upgrade-Insecure-Requests": "1",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
+  "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  "Sec-Ch-Ua-Mobile": "?0",
+  "Sec-Ch-Ua-Platform": '"Windows"',
 };
 
 /**
  * Utility to log axios errors effectively without dumping massive objects
  */
-function logAxiosError(source: string, error: any) {
+function logAxiosError(source: string, error: any, url?: string) {
   if (axios.isAxiosError(error)) {
     console.error(`Status [${source}]:`, error.response?.status || 'No Status');
     console.error(`Error [${source}]:`, error.message);
+    if (url) console.error(`URL [${source}]:`, url);
   } else {
     console.error(`Error [${source}]:`, error);
   }
@@ -64,47 +72,78 @@ async function startServer() {
       for (const query of queries) {
         // 1. jobs.ch (Swiss job board)
         if (selectedSources.includes("jobs.ch")) {
+          const jobsChUrl = `https://www.jobs.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
           try {
-            const jobsChUrl = `https://www.jobs.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
-            const response = await axios.get(jobsChUrl, { headers: HEADERS });
+            const response = await axios.get(jobsChUrl, { 
+              headers: { ...HEADERS, "Referer": "https://www.jobs.ch/" } 
+            });
             const $ = cheerio.load(response.data);
             
-            $('[data-cy="serp-item"]').each((_, el) => {
-              const linkEl = $(el).find('[data-cy="job-link"]');
-              const title = linkEl.attr('title') || linkEl.text().trim();
-              const link = linkEl.attr('href');
-              const url = link ? (link.startsWith('http') ? link : `https://www.jobs.ch${link}`) : '';
-              
-              // Extracting company and location from the p tags
-              const pTags = $(el).find('p.textStyle_caption1');
-              const location = pTags.eq(1).text().trim(); // Usually the 2nd p tag
-              const company = pTags.last().text().trim(); // Usually the last p tag
-              const description = $(el).find('[data-cy="job-snippet"]').text().trim();
-
-              if (title && url) {
-                allJobs.push({
-                  title,
-                  company: company || "Unknown Company",
-                  location: location || "Switzerland",
-                  url,
-                  description: description || undefined,
-                  source: "jobs.ch",
-                  query,
-                  scrapedAt: new Date().toISOString(),
-                  publishedAt: new Date().toISOString(), // Use current for now or try extraction
-                  status: "new"
-                });
+            let foundInJson = false;
+            const nextData = $('#__NEXT_DATA__').html();
+            if (nextData) {
+              try {
+                const parsed = JSON.parse(nextData);
+                const results = parsed.props?.pageProps?.initialState?.search?.results;
+                if (Array.isArray(results)) {
+                  results.forEach((job: any) => {
+                    allJobs.push({
+                      title: job.title,
+                      company: job.company_name || job.company?.name || "Unknown Company",
+                      location: job.location || job.place || "Switzerland",
+                      url: job.url.startsWith('http') ? job.url : `https://www.jobs.ch${job.url}`,
+                      description: job.snippet || undefined,
+                      source: "jobs.ch",
+                      query,
+                      scrapedAt: new Date().toISOString(),
+                      publishedAt: job.publication_date || new Date().toISOString(),
+                      status: "new"
+                    });
+                  });
+                  foundInJson = true;
+                }
+              } catch (e) {
+                console.warn("[jobs.ch] JSON parsing failed, falling back to selectors");
               }
-            });
+            }
+
+            if (!foundInJson) {
+              $('[data-cy="serp-item"], [data-cy="job-item"]').each((_, el) => {
+                const linkEl = $(el).find('[data-cy="job-link"], a').first();
+                const title = linkEl.attr('title') || linkEl.text().trim();
+                const link = linkEl.attr('href');
+                const url = link ? (link.startsWith('http') ? link : `https://www.jobs.ch${link}`) : '';
+                
+                const pTags = $(el).find('p.textStyle_caption1, span.textStyle_caption1');
+                const location = pTags.eq(1).text().trim();
+                const company = pTags.last().text().trim();
+                const description = $(el).find('[data-cy="job-snippet"]').text().trim();
+
+                if (title && url) {
+                  allJobs.push({
+                    title,
+                    company: company || "Unknown Company",
+                    location: location || "Switzerland",
+                    url,
+                    description: description || undefined,
+                    source: "jobs.ch",
+                    query,
+                    scrapedAt: new Date().toISOString(),
+                    publishedAt: new Date().toISOString(),
+                    status: "new"
+                  });
+                }
+              });
+            }
           } catch (e) {
-            logAxiosError("jobs.ch", e);
+            logAxiosError("jobs.ch", e, jobsChUrl);
           }
         }
 
         // 2. ictjobs.ch
         if (selectedSources.includes("ictjobs.ch")) {
+          const ictJobsUrl = `https://ictjobs.ch/?fs=${encodeURIComponent(query)}`;
           try {
-            const ictJobsUrl = `https://ictjobs.ch/?fs=${encodeURIComponent(query)}`;
             const response = await axios.get(ictJobsUrl, { headers: HEADERS });
             const $ = cheerio.load(response.data);
             
@@ -134,14 +173,14 @@ async function startServer() {
               }
             });
           } catch (e) {
-            logAxiosError("ictjobs.ch", e);
+            logAxiosError("ictjobs.ch", e, ictJobsUrl);
           }
         }
 
         // 3. LinkedIn (Guest API)
         if (selectedSources.includes("LinkedIn")) {
+          const linkedInUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=Switzerland&start=0`;
           try {
-            const linkedInUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=Switzerland&start=0`;
             const response = await axios.get(linkedInUrl, { headers: HEADERS });
             const $ = cheerio.load(response.data);
             
@@ -167,55 +206,88 @@ async function startServer() {
               }
             });
           } catch (e) {
-            logAxiosError("LinkedIn", e);
+            logAxiosError("LinkedIn", e, linkedInUrl);
           }
         }
 
         // 4. jobup.ch (French-speaking Switzerland focus)
         if (selectedSources.includes("jobup.ch")) {
+          const jobupUrl = `https://www.jobup.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
           try {
-            const jobupUrl = `https://www.jobup.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
-            const response = await axios.get(jobupUrl, { headers: HEADERS });
+            const response = await axios.get(jobupUrl, { 
+              headers: { ...HEADERS, "Referer": "https://www.jobup.ch/" } 
+            });
             const $ = cheerio.load(response.data);
             
-            $('[data-cy="job-item"]').each((_, el) => {
-              const title = $(el).find('h2').text().trim();
-              const link = $(el).find('a').attr('href');
-              const url = link ? (link.startsWith('http') ? link : `https://www.jobup.ch${link}`) : '';
-              const pTags = $(el).find('p.textStyle_caption1');
-              const location = pTags.eq(1).text().trim();
-              const company = pTags.last().text().trim();
-              const description = $(el).find('[data-cy="job-snippet"]').text().trim();
-
-              if (title && url) {
-                allJobs.push({
-                  title,
-                  company: company || "Unknown Company",
-                  location: location || "Switzerland",
-                  url,
-                  description: description || undefined,
-                  source: "jobup.ch",
-                  query,
-                  scrapedAt: new Date().toISOString(),
-                  publishedAt: new Date().toISOString(),
-                  status: "new"
-                });
+            let foundInJson = false;
+            const nextData = $('#__NEXT_DATA__').html();
+            if (nextData) {
+              try {
+                const parsed = JSON.parse(nextData);
+                const results = parsed.props?.pageProps?.initialState?.search?.results;
+                if (Array.isArray(results)) {
+                  results.forEach((job: any) => {
+                    allJobs.push({
+                      title: job.title,
+                      company: job.company_name || job.company?.name || "Unknown Company",
+                      location: job.location || job.place || "Switzerland",
+                      url: job.url.startsWith('http') ? job.url : `https://www.jobup.ch${job.url}`,
+                      description: job.snippet || undefined,
+                      source: "jobup.ch",
+                      query,
+                      scrapedAt: new Date().toISOString(),
+                      publishedAt: job.publication_date || new Date().toISOString(),
+                      status: "new"
+                    });
+                  });
+                  foundInJson = true;
+                }
+              } catch (e) {
+                console.warn("[jobup.ch] JSON parsing failed, falling back to selectors");
               }
-            });
+            }
+
+            if (!foundInJson) {
+              $('[data-cy="job-item"], [data-cy="serp-item"]').each((_, el) => {
+                const linkEl = $(el).find('a').first();
+                const title = linkEl.attr('title') || linkEl.text().trim() || $(el).find('h2').text().trim();
+                const link = linkEl.attr('href');
+                const url = link ? (link.startsWith('http') ? link : `https://www.jobup.ch${link}`) : '';
+                const pTags = $(el).find('p.textStyle_caption1, span.textStyle_caption1');
+                const location = pTags.eq(1).text().trim();
+                const company = pTags.last().text().trim();
+                const description = $(el).find('[data-cy="job-snippet"]').text().trim();
+
+                if (title && url) {
+                  allJobs.push({
+                    title,
+                    company: company || "Unknown Company",
+                    location: location || "Switzerland",
+                    url,
+                    description: description || undefined,
+                    source: "jobup.ch",
+                    query,
+                    scrapedAt: new Date().toISOString(),
+                    publishedAt: new Date().toISOString(),
+                    status: "new"
+                  });
+                }
+              });
+            }
           } catch (e) {
-            logAxiosError("jobup.ch", e);
+            logAxiosError("jobup.ch", e, jobupUrl);
           }
         }
 
         // 5. Indeed (Switzerland) - Note: Indeed has high bot protection
         if (selectedSources.includes("Indeed")) {
+          const indeedUrl = `https://ch.indeed.com/jobs?q=${encodeURIComponent(query)}&l=Switzerland&from=search-js&vjk=`;
           try {
-            // Trying a more specific Indeed URL or fallback search
-            const indeedUrl = `https://ch.indeed.com/jobs?q=${encodeURIComponent(query)}&l=Schweiz&from=search-js`;
             const response = await axios.get(indeedUrl, { 
               headers: {
                 ...HEADERS,
-                "Referer": "https://ch.indeed.com/"
+                "Referer": "https://ch.indeed.com/",
+                "Sec-Fetch-Site": "same-origin"
               } 
             });
             const $ = cheerio.load(response.data);
@@ -243,14 +315,14 @@ async function startServer() {
               }
             });
           } catch (e) {
-            logAxiosError("Indeed", e);
+            logAxiosError("Indeed", e, indeedUrl);
           }
         }
         // 6. SwissDevJobs (Alternative for Tech/AI jobs)
         if (selectedSources.includes("SwissDevJobs")) {
+          let sdvUrl = `https://swissdevjobs.ch/jobs/${encodeURIComponent(query)}/All/All`;
           try {
-            const url = `https://swissdevjobs.ch/jobs/${encodeURIComponent(query)}/All/All`;
-            const response = await axios.get(url, { headers: HEADERS });
+            const response = await axios.get(sdvUrl, { headers: HEADERS });
             const $ = cheerio.load(response.data);
             
             $('.job-list-item').each((_, el) => {
@@ -258,15 +330,15 @@ async function startServer() {
               const company = $(el).find('.company-name').text().trim();
               const location = $(el).find('.location').text().trim();
               const link = $(el).find('a.job-title').attr('href');
-              const url = link ? (link.startsWith('http') ? link : `https://swissdevjobs.ch${link}`) : '';
+              const urlValue = link ? (link.startsWith('http') ? link : `https://swissdevjobs.ch${link}`) : '';
               const description = $(el).find('.job-description').text().trim();
 
-              if (title && url) {
+              if (title && urlValue) {
                 allJobs.push({
                   title,
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
-                  url,
+                  url: urlValue,
                   description: description || undefined,
                   source: "SwissDevJobs",
                   query,
@@ -277,7 +349,7 @@ async function startServer() {
               }
             });
           } catch (e) {
-            logAxiosError("SwissDevJobs", e);
+            logAxiosError("SwissDevJobs", e, sdvUrl);
           }
         }
       }
