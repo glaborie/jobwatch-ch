@@ -48,7 +48,7 @@ async function startServer() {
   // Rate Limiting
   const scrapeLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Limit each IP to 10 requests per windowMs
+    max: 15, // Increased slightly
     message: { error: "Too many scraping requests. Please try again in 15 minutes." },
     standardHeaders: true,
     legacyHeaders: false,
@@ -56,8 +56,10 @@ async function startServer() {
 
   // API Routes
   app.get("/api/version", (req, res) => {
-    res.json({ version: "1.0.1", buildTime: new Date().toISOString() });
+    res.json({ version: "1.0.2", buildTime: new Date().toISOString() });
   });
+
+  const SCRAPE_TIMEOUT = 15000; // 15 seconds per request
 
   app.post("/api/scrape", scrapeLimiter, async (req, res) => {
     const { queries, sources } = req.body;
@@ -66,20 +68,25 @@ async function startServer() {
     }
 
     const selectedSources = Array.isArray(sources) ? sources : ["jobs.ch", "ictjobs.ch", "LinkedIn", "jobup.ch", "Indeed", "SwissDevJobs"];
+    console.log(`[Scraping] Incoming request: queries=${queries.join(",")}, sources=${selectedSources.join(",")}`);
+    
     const allJobs: any[] = [];
 
     try {
       for (const query of queries) {
-        // 1. jobs.ch (Swiss job board)
+        console.log(`[Scraping] Processing query: ${query}`);
+        
+        // 1. jobs.ch
         if (selectedSources.includes("jobs.ch")) {
           const jobsChUrl = `https://www.jobs.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
           try {
             const response = await axios.get(jobsChUrl, { 
-              headers: { ...HEADERS, "Referer": "https://www.jobs.ch/" } 
+              headers: { ...HEADERS, "Referer": "https://www.jobs.ch/" },
+              timeout: SCRAPE_TIMEOUT
             });
             const $ = cheerio.load(response.data);
+            let jobsFound = 0;
             
-            let foundInJson = false;
             const nextData = $('#__NEXT_DATA__').html();
             if (nextData) {
               try {
@@ -99,15 +106,15 @@ async function startServer() {
                       publishedAt: job.publication_date || new Date().toISOString(),
                       status: "new"
                     });
+                    jobsFound++;
                   });
-                  foundInJson = true;
                 }
               } catch (e) {
-                console.warn("[jobs.ch] JSON parsing failed, falling back to selectors");
+                console.warn("[jobs.ch] JSON parse failed");
               }
             }
 
-            if (!foundInJson) {
+            if (jobsFound === 0) {
               $('[data-cy="serp-item"], [data-cy="job-item"]').each((_, el) => {
                 const linkEl = $(el).find('[data-cy="job-link"], a').first();
                 const title = linkEl.attr('title') || linkEl.text().trim();
@@ -132,9 +139,11 @@ async function startServer() {
                     publishedAt: new Date().toISOString(),
                     status: "new"
                   });
+                  jobsFound++;
                 }
               });
             }
+            console.log(`[jobs.ch] Found ${jobsFound} jobs`);
           } catch (e) {
             logAxiosError("jobs.ch", e, jobsChUrl);
           }
@@ -144,17 +153,17 @@ async function startServer() {
         if (selectedSources.includes("ictjobs.ch")) {
           const ictJobsUrl = `https://ictjobs.ch/?fs=${encodeURIComponent(query)}`;
           try {
-            const response = await axios.get(ictJobsUrl, { headers: HEADERS });
+            const response = await axios.get(ictJobsUrl, { headers: HEADERS, timeout: SCRAPE_TIMEOUT });
             const $ = cheerio.load(response.data);
+            let jobsFound = 0;
             
-            $('h2[itemprop="title"]').each((_, el) => {
+            $('h2[itemprop="title"], .job-item h2, .vacancy-title').each((_, el) => {
               const title = $(el).text().trim();
-              const parent = $(el).parent();
-              const company = parent.find('.author-text').text().trim();
-              // Location is usually the last span in company-location
-              const location = parent.find('.company-location span').last().text().trim();
-              const description = parent.find('.description').text().trim();
-              const link = $(el).find('a').attr('href');
+              const parent = $(el).closest('.job-item, .vacancy, li, div');
+              const company = parent.find('.author-text, .company, .employer').first().text().trim();
+              const location = parent.find('.company-location span, .location').last().text().trim();
+              const description = parent.find('.description, .snippet').text().trim();
+              const link = $(el).find('a').attr('href') || parent.find('a').attr('href');
               const url = link ? (link.startsWith('http') ? link : `https://ictjobs.ch${link}`) : '';
 
               if (title && url) {
@@ -170,25 +179,28 @@ async function startServer() {
                   publishedAt: new Date().toISOString(),
                   status: "new"
                 });
+                jobsFound++;
               }
             });
+            console.log(`[ictjobs.ch] Found ${jobsFound} jobs`);
           } catch (e) {
             logAxiosError("ictjobs.ch", e, ictJobsUrl);
           }
         }
 
-        // 3. LinkedIn (Guest API)
+        // 3. LinkedIn
         if (selectedSources.includes("LinkedIn")) {
           const linkedInUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=Switzerland&start=0`;
           try {
-            const response = await axios.get(linkedInUrl, { headers: HEADERS });
+            const response = await axios.get(linkedInUrl, { headers: HEADERS, timeout: SCRAPE_TIMEOUT });
             const $ = cheerio.load(response.data);
+            let jobsFound = 0;
             
-            $('li').each((_, el) => {
-              const title = $(el).find('.base-search-card__title').text().trim();
-              const company = $(el).find('.base-search-card__subtitle').text().trim();
-              const location = $(el).find('.job-search-card__location').text().trim();
-              const link = $(el).find('a.base-card__full-link').attr('href');
+            $('li, .base-search-card, .job-search-card').each((_, el) => {
+              const title = $(el).find('.base-search-card__title, .job-search-card__title, h3').text().trim();
+              const company = $(el).find('.base-search-card__subtitle, .job-search-card__subtitle, h4').text().trim();
+              const location = $(el).find('.job-search-card__location, .base-search-card__metadata').text().trim();
+              const link = $(el).find('a.base-card__full-link, a.base-search-card__full-link').attr('href');
               
               if (title && link) {
                 allJobs.push({
@@ -203,23 +215,26 @@ async function startServer() {
                   publishedAt: new Date().toISOString(),
                   status: "new"
                 });
+                jobsFound++;
               }
             });
+            console.log(`[LinkedIn] Found ${jobsFound} jobs`);
           } catch (e) {
             logAxiosError("LinkedIn", e, linkedInUrl);
           }
         }
 
-        // 4. jobup.ch (French-speaking Switzerland focus)
+        // 4. jobup.ch
         if (selectedSources.includes("jobup.ch")) {
           const jobupUrl = `https://www.jobup.ch/en/vacancies/?term=${encodeURIComponent(query)}`;
           try {
             const response = await axios.get(jobupUrl, { 
-              headers: { ...HEADERS, "Referer": "https://www.jobup.ch/" } 
+              headers: { ...HEADERS, "Referer": "https://www.jobup.ch/" },
+              timeout: SCRAPE_TIMEOUT
             });
             const $ = cheerio.load(response.data);
+            let jobsFound = 0;
             
-            let foundInJson = false;
             const nextData = $('#__NEXT_DATA__').html();
             if (nextData) {
               try {
@@ -239,15 +254,15 @@ async function startServer() {
                       publishedAt: job.publication_date || new Date().toISOString(),
                       status: "new"
                     });
+                    jobsFound++;
                   });
-                  foundInJson = true;
                 }
               } catch (e) {
-                console.warn("[jobup.ch] JSON parsing failed, falling back to selectors");
+                console.warn("[jobup.ch] JSON parse failed");
               }
             }
 
-            if (!foundInJson) {
+            if (jobsFound === 0) {
               $('[data-cy="job-item"], [data-cy="serp-item"]').each((_, el) => {
                 const linkEl = $(el).find('a').first();
                 const title = linkEl.attr('title') || linkEl.text().trim() || $(el).find('h2').text().trim();
@@ -271,15 +286,17 @@ async function startServer() {
                     publishedAt: new Date().toISOString(),
                     status: "new"
                   });
+                  jobsFound++;
                 }
               });
             }
+            console.log(`[jobup.ch] Found ${jobsFound} jobs`);
           } catch (e) {
             logAxiosError("jobup.ch", e, jobupUrl);
           }
         }
 
-        // 5. Indeed (Switzerland) - Note: Indeed has high bot protection
+        // 5. Indeed
         if (selectedSources.includes("Indeed")) {
           const indeedUrl = `https://ch.indeed.com/jobs?q=${encodeURIComponent(query)}&l=Switzerland&from=search-js&vjk=`;
           try {
@@ -287,17 +304,22 @@ async function startServer() {
               headers: {
                 ...HEADERS,
                 "Referer": "https://ch.indeed.com/",
-                "Sec-Fetch-Site": "same-origin"
-              } 
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Dest": "document"
+              },
+              timeout: SCRAPE_TIMEOUT
             });
             const $ = cheerio.load(response.data);
+            let jobsFound = 0;
             
-            $('.job_seen_beacon').each((_, el) => {
-              const title = $(el).find('h2.jobTitle').text().trim();
-              const company = $(el).find('[data-testid="company-name"]').text().trim();
-              const location = $(el).find('[data-testid="text-location"]').text().trim();
-              const link = $(el).find('a.jcs-JobTitle').attr('href');
-              const url = link ? `https://ch.indeed.com${link}` : '';
+            const jobCards = $('.job_seen_beacon, .result, .tapItem, [id^="job_"], .slider_container');
+            jobCards.each((_, el) => {
+              const title = $(el).find('h2.jobTitle, .jobTitle, [id^="jobTitle"]').text().trim();
+              const company = $(el).find('[data-testid="company-name"], .companyName, .company_location .companyName').text().trim();
+              const location = $(el).find('[data-testid="text-location"], .companyLocation, .location').text().trim();
+              const link = $(el).find('a.jcs-JobTitle, a.result-node-job-title, a[id^="job_"]').attr('href');
+              const url = link ? (link.startsWith('http') ? link : `https://ch.indeed.com${link}`) : '';
 
               if (title && url) {
                 allJobs.push({
@@ -312,18 +334,22 @@ async function startServer() {
                   publishedAt: new Date().toISOString(),
                   status: "new"
                 });
+                jobsFound++;
               }
             });
+            console.log(`[Indeed] Found ${jobsFound} jobs`);
           } catch (e) {
             logAxiosError("Indeed", e, indeedUrl);
           }
         }
-        // 6. SwissDevJobs (Alternative for Tech/AI jobs)
+
+        // 6. SwissDevJobs
         if (selectedSources.includes("SwissDevJobs")) {
-          let sdvUrl = `https://swissdevjobs.ch/jobs/${encodeURIComponent(query)}/All/All`;
+          const sdvUrl = `https://swissdevjobs.ch/jobs/${encodeURIComponent(query)}/All/All`;
           try {
-            const response = await axios.get(sdvUrl, { headers: HEADERS });
+            const response = await axios.get(sdvUrl, { headers: HEADERS, timeout: SCRAPE_TIMEOUT });
             const $ = cheerio.load(response.data);
+            let jobsFound = 0;
             
             $('.job-list-item').each((_, el) => {
               const title = $(el).find('h2').text().trim();
@@ -346,18 +372,26 @@ async function startServer() {
                   publishedAt: new Date().toISOString(),
                   status: "new"
                 });
+                jobsFound++;
               }
             });
+            console.log(`[SwissDevJobs] Found ${jobsFound} jobs`);
           } catch (e) {
             logAxiosError("SwissDevJobs", e, sdvUrl);
           }
         }
+
+        // Delay between queries to be gentler
+        if (queries.length > 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
 
+      console.log(`[Scraping] Completed. Total jobs found: ${allJobs.length}`);
       res.json({ jobs: allJobs });
-    } catch (error) {
-      console.error("Scraping error:", error);
-      res.status(500).json({ error: "Failed to scrape jobs" });
+    } catch (error: any) {
+      console.error("Critical Scraping Error:", error);
+      res.status(500).json({ error: `Failed to scrape jobs: ${error.message || "Unknown error"}` });
     }
   });
 
