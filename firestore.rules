@@ -8,7 +8,9 @@ service cloud.firestore {
 
     // Reuseable hardened global helpers
     function isSignedIn() { return request.auth != null; }
-    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isVerified() { 
+      return isSignedIn() && request.auth.token.email_verified == true; 
+    }
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
@@ -17,7 +19,6 @@ service cloud.firestore {
     // Validation Blueprint: Job
     function isValidJob(data) {
       return data.keys().hasAll(['title', 'company', 'url', 'source', 'scrapedAt', 'status'])
-        && (data.keys().size() >= 6 && data.keys().size() <= 11)
         && data.title is string && data.title.size() <= 500
         && data.company is string && data.company.size() <= 500
         && data.url is string && data.url.size() <= 2048
@@ -25,10 +26,10 @@ service cloud.firestore {
         && data.status in ['new', 'applied', 'discarded']
         && data.scrapedAt is timestamp
         && (data.get('publishedAt', null) == null || data.publishedAt is timestamp)
-        && (data.get('description', '') is string && data.get('description', '').size() <= 6000)
-        && (data.get('location', '') is string && data.get('location', '').size() <= 200)
-        && (data.get('query', '') is string && data.get('query', '').size() <= 200)
-        && (data.get('summary', '') is string && data.get('summary', '').size() <= 3000);
+        && (data.get('description', '') is string && data.get('description', '').size() <= 10000)
+        && (data.get('location', '') is string && data.get('location', '').size() <= 500)
+        && (data.get('query', '') is string && data.get('query', '').size() <= 500)
+        && (data.get('summary', '') is string && data.get('summary', '').size() <= 5000);
     }
 
     // Validation Blueprint: UserSettings
@@ -67,9 +68,5 @@ service cloud.firestore {
       }
     }
 
-    // Temporary rule for migration of legacy data
-    match /jobs/{jobId} {
-      allow read, list, get, delete: if isSignedIn();
-    }
   }
 }

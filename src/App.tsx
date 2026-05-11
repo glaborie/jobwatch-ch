@@ -509,10 +509,16 @@ export default function App() {
       });
 
       const data = await response.json();
+      if (!response.ok) {
+        const errorMsg = data.details || data.error || `Server returned ${response.status}`;
+        throw new Error(errorMsg);
+      }
+
       if (data.error) throw new Error(data.error);
 
       const scrapedJobs = data.jobs;
       let addedCount = 0;
+      let errorCount = 0;
 
       // Add to Firestore
       const jobsColRef = collection(db, "users", user.uid, "jobs");
@@ -529,31 +535,45 @@ export default function App() {
       for (const job of scrapedJobs) {
         if (!existingUrls.has(job.url)) {
             try {
-              await addDoc(jobsColRef, {
+              const jobData = {
                 ...job,
-                publishedAt: job.publishedAt ? new Date(job.publishedAt) : null,
+                publishedAt: (job.publishedAt && !isNaN(new Date(job.publishedAt).getTime())) ? new Date(job.publishedAt) : null,
                 scrapedAt: serverTimestamp()
-              });
+              };
+              await addDoc(jobsColRef, jobData);
               addedCount++;
               existingUrls.add(job.url);
-            } catch (err) {
+            } catch (err: any) {
+              errorCount++;
               if (isQuotaError(err)) {
                 setIsQuotaExceeded(true);
                 setStatus({ type: 'error', message: "Firestore quota exceeded. Some scraped jobs were not saved." });
-                break; // Stop trying to add jobs
+                break;
               }
-              handleFirestoreError(err, OperationType.CREATE, `users/${user.uid}/jobs`);
+              // Log more details for debugging
+              console.error(`[Firestore Create Error] ${err.code || 'unknown'}: ${err.message}`, {
+                jobUrl: job.url,
+                jobSource: job.source
+              });
             }
         }
       }
 
-      setStatus({ 
-        type: 'success', 
-        message: `Scraping complete! Found ${scrapedJobs.length} jobs, added ${addedCount} new ones.` 
-      });
-    } catch (error) {
+      if (errorCount > 0) {
+        setStatus({ 
+          type: 'info', 
+          message: `Scraping complete! Found ${scrapedJobs.length} jobs, added ${addedCount} new ones. (${errorCount} errors saving to DB)` 
+        });
+      } else {
+        setStatus({ 
+          type: 'success', 
+          message: `Scraping complete! Found ${scrapedJobs.length} jobs, added ${addedCount} new ones.` 
+        });
+      }
+    } catch (error: any) {
       console.error("Scrape error:", error);
-      setStatus({ type: 'error', message: "Scraping failed. Check server logs." });
+      const msg = error instanceof Error ? error.message : "Scraping failed.";
+      setStatus({ type: 'error', message: `Scraping failed: ${msg}` });
     } finally {
       setIsScraping(false);
     }

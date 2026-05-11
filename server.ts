@@ -68,7 +68,7 @@ async function startServer() {
     }
 
     const selectedSources = Array.isArray(sources) ? sources : ["jobs.ch", "ictjobs.ch", "LinkedIn", "jobup.ch", "Indeed", "SwissDevJobs"];
-    console.log(`[Scraping] Incoming request: queries=${queries.join(",")}, sources=${selectedSources.join(",")}`);
+    console.log(`[Scraping] Incoming request: queries=${JSON.stringify(queries)}, sources=${JSON.stringify(selectedSources)}`);
     
     const allJobs: any[] = [];
 
@@ -95,11 +95,11 @@ async function startServer() {
                 if (Array.isArray(results)) {
                   results.forEach((job: any) => {
                     allJobs.push({
-                      title: job.title,
+                      title: job.title || "Untitled Job",
                       company: job.company_name || job.company?.name || "Unknown Company",
                       location: job.location || job.place || "Switzerland",
                       url: job.url.startsWith('http') ? job.url : `https://www.jobs.ch${job.url}`,
-                      description: job.snippet || undefined,
+                      description: job.snippet || "",
                       source: "jobs.ch",
                       query,
                       scrapedAt: new Date().toISOString(),
@@ -172,7 +172,7 @@ async function startServer() {
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
                   url,
-                  description: description || undefined,
+                  description: description || "",
                   source: "ictjobs.ch",
                   query,
                   scrapedAt: new Date().toISOString(),
@@ -199,7 +199,10 @@ async function startServer() {
             $('li, .base-search-card, .job-search-card').each((_, el) => {
               const title = $(el).find('.base-search-card__title, .job-search-card__title, h3').text().trim();
               const company = $(el).find('.base-search-card__subtitle, .job-search-card__subtitle, h4').text().trim();
-              const location = $(el).find('.job-search-card__location, .base-search-card__metadata').text().trim();
+              const locationEl = $(el).find('.job-search-card__location');
+              const location = locationEl.length > 0 
+                ? locationEl.text().trim() 
+                : $(el).find('.base-search-card__metadata').contents().first().text().trim();
               const link = $(el).find('a.base-card__full-link, a.base-search-card__full-link').attr('href');
               
               if (title && link) {
@@ -243,11 +246,11 @@ async function startServer() {
                 if (Array.isArray(results)) {
                   results.forEach((job: any) => {
                     allJobs.push({
-                      title: job.title,
+                      title: job.title || "Untitled Job",
                       company: job.company_name || job.company?.name || "Unknown Company",
                       location: job.location || job.place || "Switzerland",
                       url: job.url.startsWith('http') ? job.url : `https://www.jobup.ch${job.url}`,
-                      description: job.snippet || undefined,
+                      description: job.snippet || "",
                       source: "jobup.ch",
                       query,
                       scrapedAt: new Date().toISOString(),
@@ -365,7 +368,7 @@ async function startServer() {
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
                   url: urlValue,
-                  description: description || undefined,
+                  description: description || "",
                   source: "SwissDevJobs",
                   query,
                   scrapedAt: new Date().toISOString(),
@@ -391,7 +394,11 @@ async function startServer() {
       res.json({ jobs: allJobs });
     } catch (error: any) {
       console.error("Critical Scraping Error:", error);
-      res.status(500).json({ error: `Failed to scrape jobs: ${error.message || "Unknown error"}` });
+      res.status(500).json({ 
+        error: "Failed to scrape jobs", 
+        details: error.message || "Unknown error",
+        stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+      });
     }
   });
 
