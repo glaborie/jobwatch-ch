@@ -113,6 +113,29 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw newError;
 }
 
+function normalizeUrl(url: string): string {
+  if (!url) return "";
+  try {
+    if (!url.startsWith('http')) return url;
+    const u = new URL(url);
+    u.search = '';
+    u.hash = '';
+    let hostname = u.hostname.toLowerCase();
+    if (hostname.includes('linkedin.com')) {
+      hostname = 'www.linkedin.com';
+    }
+    u.hostname = hostname;
+    let pathname = u.pathname;
+    if (pathname.endsWith('/') && pathname.length > 1) {
+      pathname = pathname.slice(0, -1);
+    }
+    u.pathname = pathname;
+    return u.toString();
+  } catch (e) {
+    return url.split('?')[0].split('#')[0].replace(/\/$/, "");
+  }
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -144,6 +167,8 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [summarizingIds, setSummarizingIds] = useState<Set<string>>(new Set());
+  const [isDeduping, setIsDeduping] = useState(false);
+  const [pendingDuplicates, setPendingDuplicates] = useState<{ids: string[], groupCount: number} | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [legacyJobsCount, setLegacyJobsCount] = useState(0);
   const [isMigrating, setIsMigrating] = useState(false);
@@ -508,7 +533,17 @@ export default function App() {
         })
       });
 
-      const data = await response.json();
+      const contentType = response.headers.get('content-type');
+      let data: any;
+
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        console.error("Non-JSON response from server:", text.substring(0, 500));
+        throw new Error(`Server returned non-JSON response (${response.status}). The server might be restarting or experiencing an error.`);
+      }
+
       if (!response.ok) {
         const errorMsg = data.details || data.error || `Server returned ${response.status}`;
         throw new Error(errorMsg);
@@ -524,25 +559,27 @@ export default function App() {
       const jobsColRef = collection(db, "users", user.uid, "jobs");
       
       // Optimization: Reuse the existing jobs list to avoid unnecessary reads
-      const existingUrls = new Set(jobs.map(j => j.url));
+      const existingUrls = new Set(jobs.map(j => normalizeUrl(j.url)));
       
       // If our memory list is small, fetch a bit more just in case
       if (jobs.length < 500) {
         const extraSnap = await getDocs(query(jobsColRef, limit(1000)));
-        extraSnap.docs.forEach(d => existingUrls.add(d.data().url));
+        extraSnap.docs.forEach(d => existingUrls.add(normalizeUrl(d.data().url)));
       }
 
       for (const job of scrapedJobs) {
-        if (!existingUrls.has(job.url)) {
+        const normalizedUrl = normalizeUrl(job.url);
+        if (!existingUrls.has(normalizedUrl)) {
             try {
               const jobData = {
                 ...job,
+                url: normalizedUrl,
                 publishedAt: (job.publishedAt && !isNaN(new Date(job.publishedAt).getTime())) ? new Date(job.publishedAt) : null,
                 scrapedAt: serverTimestamp()
               };
               await addDoc(jobsColRef, jobData);
               addedCount++;
-              existingUrls.add(job.url);
+              existingUrls.add(normalizedUrl);
             } catch (err: any) {
               errorCount++;
               if (isQuotaError(err)) {
@@ -677,6 +714,86 @@ export default function App() {
         ? prev.filter(l => l !== loc)
         : [...prev, loc]
     );
+  };
+
+  const handleDedup = async () => {
+    if (!user || jobs.length === 0 || isDeduping) return;
+    setIsDeduping(true);
+    setStatus({ type: 'info', message: "Scanning for duplicates..." });
+    
+    try {
+      const urlGroups: Record<string, Job[]> = {};
+      
+      jobs.forEach(job => {
+        const normalized = normalizeUrl(job.url);
+        if (!urlGroups[normalized]) urlGroups[normalized] = [];
+        urlGroups[normalized].push(job);
+      });
+      
+      const duplicatesToDelete: string[] = [];
+      let groupCount = 0;
+      
+      Object.entries(urlGroups).forEach(([, group]) => {
+        if (group.length > 1) {
+          groupCount++;
+          // Sort by scrapedAt ascending (oldest first)
+          group.sort((a, b) => {
+            const timeA = (a.scrapedAt as any)?.seconds ?? new Date(a.scrapedAt as any).getTime();
+            const timeB = (b.scrapedAt as any)?.seconds ?? new Date(b.scrapedAt as any).getTime();
+            return timeA - timeB;
+          });
+          
+          // Keep the oldest, delete the newer ones (as requested: "delete most recent entries")
+          const toDelete = group.slice(1).map(j => j.id).filter((id): id is string => !!id);
+          duplicatesToDelete.push(...toDelete);
+        }
+      });
+      
+      if (duplicatesToDelete.length === 0) {
+        setStatus({ type: 'success', message: "No duplicates found! Your database is clean." });
+        setIsDeduping(false);
+        return;
+      }
+      
+      setPendingDuplicates({ ids: duplicatesToDelete, groupCount });
+      setStatus(null);
+      setIsDeduping(false);
+    } catch (err: any) {
+      console.error("Dedup scan error:", err);
+      setStatus({ type: 'error', message: `Scan failed: ${err.message}` });
+      setIsDeduping(false);
+    }
+  };
+
+  const executeDedup = async () => {
+    if (!user || !pendingDuplicates || isDeduping) return;
+    
+    setIsDeduping(true);
+    const { ids } = pendingDuplicates;
+    setStatus({ type: 'info', message: `Archiving ${ids.length} duplicates...` });
+    
+    try {
+      let deletedCount = 0;
+      for (const id of ids) {
+        try {
+          await deleteDoc(doc(db, "users", user.uid, "jobs", id));
+          deletedCount++;
+          if (deletedCount % 10 === 0) {
+             setStatus({ type: 'info', message: `Cleaned ${deletedCount}/${ids.length} duplicates...` });
+          }
+        } catch (err) {
+          console.error(`Failed to delete duplicate ${id}:`, err);
+        }
+      }
+      
+      setStatus({ type: 'success', message: `Successfully removed ${deletedCount} duplicate entries.` });
+    } catch (err: any) {
+      console.error("Dedup execution error:", err);
+      setStatus({ type: 'error', message: `Dedup failed: ${err.message}` });
+    } finally {
+      setIsDeduping(false);
+      setPendingDuplicates(null);
+    }
   };
 
   const handleExport = () => {
@@ -905,6 +1022,42 @@ export default function App() {
                       </div>
                     </label>
                   ))}
+                  
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 mt-2">
+                    {pendingDuplicates ? (
+                      <div className="bg-blue-50 dark:bg-blue-900/10 p-3 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                        <p className="text-[10px] text-blue-700 dark:text-blue-300 font-medium mb-2 leading-relaxed">
+                          Found {pendingDuplicates.ids.length} duplicates in {pendingDuplicates.groupCount} job groups. 
+                          Delete most recent entries and keep the oldest?
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={executeDedup}
+                            disabled={isDeduping}
+                            className="flex-1 text-[10px] font-bold bg-blue-600 text-white py-1.5 rounded-md hover:bg-blue-700 transition-colors"
+                          >
+                            {isDeduping ? "Processing..." : "Confirm & Delete"}
+                          </button>
+                          <button
+                            onClick={() => setPendingDuplicates(null)}
+                            disabled={isDeduping}
+                            className="flex-1 text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 py-1.5 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleDedup}
+                        disabled={isDeduping || jobs.length === 0}
+                        className="w-full flex items-center justify-center gap-2 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 p-2 rounded-lg transition-all border border-transparent hover:border-blue-100 dark:hover:border-blue-900"
+                      >
+                        {isDeduping ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        Cleanup Duplicates
+                      </button>
+                    )}
+                  </div>
                 </div>
               </section>
 

@@ -6,9 +6,19 @@ import * as cheerio from "cheerio";
 import cors from "cors";
 import { rateLimit } from 'express-rate-limit';
 
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+];
+
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 // Note: Scraping major sites like LinkedIn/Indeed usually requires headers to avoid being blocked.
 const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
   "Accept-Language": "en-US,en;q=0.9,de-CH;q=0.8,de;q=0.7",
   "Accept-Encoding": "gzip, deflate, br",
@@ -34,6 +44,40 @@ function logAxiosError(source: string, error: any, url?: string) {
     if (url) console.error(`URL [${source}]:`, url);
   } else {
     console.error(`Error [${source}]:`, error);
+  }
+}
+
+/**
+ * Global URL Normalization to prevent duplicates
+ */
+function normalizeJobUrl(url: string): string {
+  if (!url) return "";
+  try {
+    // Handle cases where URL might be relative (though scrapers should handle it)
+    if (!url.startsWith('http')) return url;
+    
+    const u = new URL(url);
+    u.search = '';
+    u.hash = '';
+    
+    // Normalize hostname
+    let hostname = u.hostname.toLowerCase();
+    if (hostname.includes('linkedin.com')) {
+      hostname = 'www.linkedin.com';
+    }
+    u.hostname = hostname;
+
+    // Normalize path
+    let pathname = u.pathname;
+    if (pathname.endsWith('/') && pathname.length > 1) {
+      pathname = pathname.slice(0, -1);
+    }
+    u.pathname = pathname;
+
+    return u.toString();
+  } catch (e) {
+    // Fallback for malformed URLs
+    return url.split('?')[0].split('#')[0].replace(/\/$/, "");
   }
 }
 
@@ -94,11 +138,12 @@ async function startServer() {
                 const results = parsed.props?.pageProps?.initialState?.search?.results;
                 if (Array.isArray(results)) {
                   results.forEach((job: any) => {
+                    const url = job.url.startsWith('http') ? job.url : `https://www.jobs.ch${job.url}`;
                     allJobs.push({
                       title: job.title || "Untitled Job",
                       company: job.company_name || job.company?.name || "Unknown Company",
                       location: job.location || job.place || "Switzerland",
-                      url: job.url.startsWith('http') ? job.url : `https://www.jobs.ch${job.url}`,
+                      url: normalizeJobUrl(url),
                       description: job.snippet || "",
                       source: "jobs.ch",
                       query,
@@ -153,7 +198,10 @@ async function startServer() {
         if (selectedSources.includes("ictjobs.ch")) {
           const ictJobsUrl = `https://ictjobs.ch/?fs=${encodeURIComponent(query)}`;
           try {
-            const response = await axios.get(ictJobsUrl, { headers: HEADERS, timeout: SCRAPE_TIMEOUT });
+            const response = await axios.get(ictJobsUrl, { 
+              headers: { ...HEADERS, "User-Agent": getRandomUserAgent() }, 
+              timeout: SCRAPE_TIMEOUT 
+            });
             const $ = cheerio.load(response.data);
             let jobsFound = 0;
             
@@ -171,7 +219,7 @@ async function startServer() {
                   title,
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
-                  url,
+                  url: normalizeJobUrl(url),
                   description: description || "",
                   source: "ictjobs.ch",
                   query,
@@ -192,7 +240,10 @@ async function startServer() {
         if (selectedSources.includes("LinkedIn")) {
           const linkedInUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=Switzerland&start=0`;
           try {
-            const response = await axios.get(linkedInUrl, { headers: HEADERS, timeout: SCRAPE_TIMEOUT });
+            const response = await axios.get(linkedInUrl, { 
+              headers: { ...HEADERS, "User-Agent": getRandomUserAgent() }, 
+              timeout: SCRAPE_TIMEOUT 
+            });
             const $ = cheerio.load(response.data);
             let jobsFound = 0;
             
@@ -210,7 +261,7 @@ async function startServer() {
                   title,
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
-                  url: link,
+                  url: normalizeJobUrl(link),
                   description: "View full description on LinkedIn.",
                   source: "LinkedIn",
                   query,
@@ -245,11 +296,12 @@ async function startServer() {
                 const results = parsed.props?.pageProps?.initialState?.search?.results;
                 if (Array.isArray(results)) {
                   results.forEach((job: any) => {
+                    const url = job.url.startsWith('http') ? job.url : `https://www.jobup.ch${job.url}`;
                     allJobs.push({
                       title: job.title || "Untitled Job",
                       company: job.company_name || job.company?.name || "Unknown Company",
                       location: job.location || job.place || "Switzerland",
-                      url: job.url.startsWith('http') ? job.url : `https://www.jobup.ch${job.url}`,
+                      url: normalizeJobUrl(url),
                       description: job.snippet || "",
                       source: "jobup.ch",
                       query,
@@ -303,13 +355,18 @@ async function startServer() {
         if (selectedSources.includes("Indeed")) {
           const indeedUrl = `https://ch.indeed.com/jobs?q=${encodeURIComponent(query)}&l=Switzerland&from=search-js&vjk=`;
           try {
+            const currentUA = getRandomUserAgent();
             const response = await axios.get(indeedUrl, { 
               headers: {
                 ...HEADERS,
+                "User-Agent": currentUA,
                 "Referer": "https://ch.indeed.com/",
                 "Sec-Fetch-Site": "same-origin",
                 "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Dest": "document"
+                "Sec-Fetch-Dest": "document",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
               },
               timeout: SCRAPE_TIMEOUT
             });
@@ -329,7 +386,7 @@ async function startServer() {
                   title,
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
-                  url,
+                  url: normalizeJobUrl(url),
                   description: "View full description on Indeed.",
                   source: "Indeed",
                   query,
@@ -350,7 +407,10 @@ async function startServer() {
         if (selectedSources.includes("SwissDevJobs")) {
           const sdvUrl = `https://swissdevjobs.ch/jobs/${encodeURIComponent(query)}/All/All`;
           try {
-            const response = await axios.get(sdvUrl, { headers: HEADERS, timeout: SCRAPE_TIMEOUT });
+            const response = await axios.get(sdvUrl, { 
+              headers: { ...HEADERS, "User-Agent": getRandomUserAgent() }, 
+              timeout: SCRAPE_TIMEOUT 
+            });
             const $ = cheerio.load(response.data);
             let jobsFound = 0;
             
@@ -367,7 +427,7 @@ async function startServer() {
                   title,
                   company: company || "Unknown Company",
                   location: location || "Switzerland",
-                  url: urlValue,
+                  url: normalizeJobUrl(urlValue),
                   description: description || "",
                   source: "SwissDevJobs",
                   query,
@@ -425,6 +485,21 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  // Initialized dev server info
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  // Global Error Handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled Server Error:", err);
+    res.status(500).json({
+      error: "Internal Server Error",
+      details: err.message || "Unknown error",
+      stack: process.env.NODE_ENV !== 'production' ? err.stack : undefined
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
