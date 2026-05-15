@@ -48,7 +48,7 @@ import {
   setDoc,
   deleteDoc
 } from 'firebase/firestore';
-import { auth, db, ai, legacyDb } from './firebase';
+import { auth, db, ai, legacyDb, namedDb } from './firebase';
 
 type JobStatus = 'new' | 'discarded' | 'applied';
 
@@ -116,23 +116,41 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 function normalizeUrl(url: string): string {
   if (!url) return "";
   try {
-    if (!url.startsWith('http')) return url;
     const u = new URL(url);
-    u.search = '';
-    u.hash = '';
+    u.hash = "";
+    
+    // Normalize hostname: lowercase and remove www.
     let hostname = u.hostname.toLowerCase();
-    if (hostname.includes('linkedin.com')) {
-      hostname = 'www.linkedin.com';
+    if (hostname.startsWith('www.')) {
+      hostname = hostname.substring(4);
     }
     u.hostname = hostname;
+
+    // Normalize protocol to https
+    if (u.protocol === 'http:') u.protocol = 'https:';
+
+    // Selective search param stripping
+    // For Indeed, 'jk' is critical. For others, we strip everything to match server
+    const searchParams = new URLSearchParams(u.search);
+    const newParams = new URLSearchParams();
+    
+    if (hostname.includes('indeed.com')) {
+       const jk = searchParams.get('jk');
+       if (jk) newParams.set('jk', jk);
+    }
+    
+    u.search = newParams.toString();
+
+    // Normalize path: trailing slash removal
     let pathname = u.pathname;
     if (pathname.endsWith('/') && pathname.length > 1) {
       pathname = pathname.slice(0, -1);
     }
     u.pathname = pathname;
-    return u.toString();
+
+    return u.toString().toLowerCase(); // lowercase entire URL for safety
   } catch (e) {
-    return url.split('?')[0].split('#')[0].replace(/\/$/, "");
+    return url.split('?')[0].split('#')[0].replace(/\/$/, "").toLowerCase();
   }
 }
 
@@ -170,17 +188,8 @@ export default function App() {
   const [isDeduping, setIsDeduping] = useState(false);
   const [pendingDuplicates, setPendingDuplicates] = useState<{ids: string[], groupCount: number} | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [legacyJobsCount, setLegacyJobsCount] = useState(0);
-  const [isMigrating, setIsMigrating] = useState(false);
+  const [lastScrapeAt, setLastScrapeAt] = useState<Timestamp | null>(null);
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
-  const [migrationStatus, setMigrationStatus] = useState<'pending' | 'checking' | 'done'>(() => {
-    try {
-      const saved = localStorage.getItem(`migration_status_${auth.currentUser?.uid || 'anon'}`);
-      return (saved as any) || 'pending';
-    } catch (e) {
-      return 'pending';
-    }
-  });
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       const saved = localStorage.getItem('theme');
@@ -223,6 +232,7 @@ export default function App() {
           if (data.selectedSources) setSelectedSources(data.selectedSources);
           if (data.excludedKeywords) setExcludedKeywords(data.excludedKeywords);
           if (data.theme) setTheme(data.theme);
+          if (data.lastScrapeAt) setLastScrapeAt(data.lastScrapeAt);
         }
         setSettingsLoaded(true);
       } catch (err) {
@@ -245,153 +255,50 @@ export default function App() {
     loadSettings();
   }, [user]);
 
-  const migrateLegacyJobs = async () => {
-    if (!user || isMigrating) return;
-    setIsMigrating(true);
-    setStatus({ type: 'info', message: "Migrating legacy jobs..." });
-
-    try {
-      const userJobsRef = collection(db, "users", user.uid, "jobs");
-      let migratedCount = 0;
-
-      // Optimization: Fetch all existing job URLs for this user in one go to avoid sub-queries
-      const existingJobsSnap = await getDocs(query(userJobsRef, limit(1000)));
-      const existingUrls = new Set(existingJobsSnap.docs.map(d => d.data().url));
-
-      // Helper to process a snapshot
-      const processSnap = async (snap: any, sourceDb: any, label: string) => {
-        console.log(`[Migration] Processing ${snap.size} docs from ${label}...`);
-        for (const legacyDoc of snap.docs) {
-          const data = legacyDoc.data();
-          
-          if (!existingUrls.has(data.url)) {
-            const normalizedData = { 
-              title: data.title || "Untitled Job",
-              company: data.company || "Unknown Company",
-              url: data.url || "",
-              source: data.source || "Legacy",
-              status: data.status || "new",
-              ...data 
-            };
-            
-            // Normalize scrapedAt
-            if (typeof data.scrapedAt === 'string') {
-              normalizedData.scrapedAt = new Date(data.scrapedAt);
-            } else if (!data.scrapedAt) {
-              normalizedData.scrapedAt = serverTimestamp();
-            }
-
-            // Normalize publishedAt
-            if (typeof data.publishedAt === 'string') {
-              normalizedData.publishedAt = new Date(data.publishedAt);
-            }
-            
-            await addDoc(userJobsRef, normalizedData);
-            migratedCount++;
-            existingUrls.add(data.url); // Add to local set to prevent dupes within the same run
-          }
-          
-          // Cleanup
-          try {
-            await deleteDoc(doc(sourceDb, "jobs", legacyDoc.id));
-          } catch (e) {
-            console.warn(`[Migration] Could not delete legacy doc ${legacyDoc.id} from ${label}:`, e);
-          }
-        }
-      };
-
-      // Migrate from default db
-      let snapLegacy;
-      try {
-        console.log("[Migration] Attempting to fetch from legacyDb (default)...");
-        snapLegacy = await getDocs(query(collection(legacyDb, "jobs")));
-        await processSnap(snapLegacy, legacyDb, "legacy (default)");
-      } catch (err: any) {
-        console.error("[Migration] Error reading legacyDb:", err);
-        // If it's a permission error on legacyDb, we might still want to try the current DB top-level
-        if (!err.message?.includes("permission")) {
-          throw err;
-        }
-      }
-
-      // Migrate from current db top-level
-      let snapCurrent;
-      try {
-        console.log("[Migration] Attempting to fetch from current db top-level...");
-        snapCurrent = await getDocs(query(collection(db, "jobs")));
-        await processSnap(snapCurrent, db, "current (top-level)");
-      } catch (err: any) {
-        console.error("[Migration] Error reading current db top-level:", err);
-        throw err;
-      }
-
-      setLegacyJobsCount(0);
-      setMigrationStatus('done');
-      localStorage.setItem(`migration_status_${user.uid}`, 'done');
-      setStatus({ type: 'success', message: `Successfully migrated ${migratedCount} legacy jobs.` });
-    } catch (err: any) {
-      if (isQuotaError(err)) {
-        setIsQuotaExceeded(true);
-        setStatus({ type: 'error', message: "Migration failed due to Firestore quota. Limit resets tomorrow." });
-      } else {
-        console.error("Migration error:", err);
-        setStatus({ 
-          type: 'error', 
-          message: `Migration failed: ${err.message || "Unknown error"}. Check console for details.` 
-        });
-      }
-    } finally {
-      setIsMigrating(false);
-    }
-  };
-
-  // Check for legacy jobs
   useEffect(() => {
-    if (!user || migrationStatus === 'done') return;
-
-    const checkLegacy = async () => {
-      if (!user) return;
-      if (migrationStatus === 'checking') return;
-      
-      setMigrationStatus('checking');
-      console.log(`[Migration] Checking for legacy jobs for ${user.email}...`);
+    const testConnection = async () => {
       try {
-        // Check legacyDb (default)
-        const qLegacy = query(collection(legacyDb, "jobs"), limit(50));
-        const snapLegacy = await getDocs(qLegacy);
-        console.log(`[Migration] Found ${snapLegacy.size} jobs in legacyDb (default)`);
-        
-        // Check current db top-level
-        const qCurrent = query(collection(db, "jobs"), limit(50));
-        const snapCurrent = await getDocs(qCurrent);
-        console.log(`[Migration] Found ${snapCurrent.size} jobs in current db (top-level)`);
-
-        const total = snapLegacy.size + snapCurrent.size;
-        setLegacyJobsCount(total);
-        
-        if (total === 0) {
-          setMigrationStatus('done');
-          localStorage.setItem(`migration_status_${user.uid}`, 'done');
+        console.log("[Firestore] Testing connection...");
+        const { getDocFromServer } = await import('firebase/firestore');
+        await getDocFromServer(doc(db, 'test', 'connection')).catch(e => {
+          // 403 or 404 is actually a good sign (it means we reached the server)
+          // "Missing or insufficient permissions" on a random 'test' doc is expected with my current rules
+          console.log("[Firestore] Connection test reached server (response received)");
+        });
+      } catch (error: any) {
+        if (error.message?.includes('offline')) {
+          console.error("[Firestore] Connection test: CLIENT OFFLINE. Check configuration.");
         } else {
-          setMigrationStatus('pending'); // Still something to migrate
+          console.warn("[Firestore] Connection test details:", error);
         }
-
-        // Auto-trigger for specific user if needed or requested
-        if (total > 0 && user.email === 'glaborie@gmail.com') {
-          console.log("[Migration] Auto-triggering migration for glaborie@gmail.com...");
-          migrateLegacyJobs();
-        }
-      } catch (err) {
-        if (isQuotaError(err)) {
-          setIsQuotaExceeded(true);
-        }
-        setMigrationStatus('pending'); // Retry later
-        console.warn("[Migration] Error checking legacy jobs:", err);
       }
     };
+    testConnection();
+  }, []);
 
-    checkLegacy();
-  }, [user, migrationStatus]);
+  const purgeLegacyData = async () => {
+    if (!user) return;
+    setStatus({ type: 'info', message: "Purging legacy data collections..." });
+    try {
+      let count = 0;
+      // 1. Delete from current DB top-level jobs (legacy)
+      const snap1 = await getDocs(query(collection(db, "jobs"), limit(100)));
+      for (const d of snap1.docs) { await deleteDoc(d.ref); count++; }
+
+      // 2. Delete from legacyDb top-level jobs
+      const snap2 = await getDocs(query(collection(legacyDb, "jobs"), limit(100)));
+      for (const d of snap2.docs) { await deleteDoc(d.ref); count++; }
+
+      // 3. Delete from namedDb top-level jobs
+      const snap3 = await getDocs(query(collection(namedDb, "jobs"), limit(100)));
+      for (const d of snap3.docs) { await deleteDoc(d.ref); count++; }
+
+      setStatus({ type: 'success', message: `Purged ${count} legacy records. Refresh to see changes.` });
+    } catch (err: any) {
+      console.error("Purge error:", err);
+      setStatus({ type: 'error', message: "Purge failed: " + err.message });
+    }
+  };
 
   // Sync settings to Firestore
   useEffect(() => {
@@ -406,7 +313,8 @@ export default function App() {
           searchQueries,
           selectedSources,
           excludedKeywords,
-          theme
+          theme,
+          lastScrapeAt
         }, { merge: true });
       } catch (err) {
         if (isQuotaError(err)) {
@@ -476,13 +384,24 @@ export default function App() {
     );
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const jobsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Job[];
+      console.log(`[Firestore] snapshot received for jobs: ${snapshot.size} docs`);
+      if (snapshot.empty) {
+        console.log("[Firestore] No jobs found for current user.");
+      }
+      const jobsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        if (!data.scrapedAt) {
+          console.warn(`[Firestore] Job ${doc.id} is missing scrapedAt!`);
+        }
+        return {
+          id: doc.id,
+          ...data
+        };
+      }) as Job[];
       setJobs(jobsData);
-      setHasMore(false); // We fetch everything up to 2000 now
+      setHasMore(false);
     }, (error) => {
+      console.error("[Firestore] onSnapshot error details:", error);
       if (isQuotaError(error)) {
         setIsQuotaExceeded(true);
         setStatus({ 
@@ -551,7 +470,15 @@ export default function App() {
 
       if (data.error) throw new Error(data.error);
 
-      const scrapedJobs = data.jobs;
+      const scrapedJobs = data.jobs || [];
+      console.log(`[Scraper] Returned ${scrapedJobs.length} jobs.`);
+      
+      if (scrapedJobs.length === 0) {
+        setStatus({ type: 'info', message: "Search complete. No new jobs found for these criteria." });
+        setIsScraping(false);
+        return;
+      }
+
       let addedCount = 0;
       let errorCount = 0;
 
@@ -595,7 +522,17 @@ export default function App() {
             }
         }
       }
-
+      
+      // Update last scrape timestamp
+      try {
+        const now = new Date();
+        setLastScrapeAt(Timestamp.fromDate(now));
+        const settingsRef = doc(db, 'users', user.uid, 'settings', 'preferences');
+        await updateDoc(settingsRef, { lastScrapeAt: serverTimestamp() });
+      } catch (e) {
+        console.warn("Could not update lastScrapeAt in Firestore", e);
+      }
+      
       if (errorCount > 0) {
         setStatus({ 
           type: 'info', 
@@ -818,18 +755,25 @@ export default function App() {
 
   const filteredJobs = jobs.filter(job => {
     // Status filter (now handled client-side to save reads)
-    if (activeFilter !== 'all' && job.status !== activeFilter) return false;
+    const matchesStatus = (activeFilter === 'all' || job.status === activeFilter);
+    if (!matchesStatus) return false;
 
     // Keyword filter
     const searchStr = `${job.title} ${job.company} ${job.description || ''}`.toLowerCase();
     const hasExcludedKeyword = excludedKeywords.some(kw => searchStr.includes(kw.toLowerCase()));
+    if (hasExcludedKeyword) return false;
     
     // Location filter
     const jobLocation = job.location || "Switzerland";
     const isIgnoredLocation = ignoredLocations.includes(jobLocation);
+    if (isIgnoredLocation) return false;
 
-    return !hasExcludedKeyword && !isIgnoredLocation;
+    return true;
   });
+
+  useEffect(() => {
+    console.log(`[Filtering] Raw jobs: ${jobs.length}, Filtered jobs: ${filteredJobs.length}, Active filter: ${activeFilter}`);
+  }, [jobs.length, filteredJobs.length, activeFilter]);
 
   const displayJobs = filteredJobs.slice(0, pageSize);
   const canLoadMore = filteredJobs.length > pageSize;
@@ -1188,37 +1132,6 @@ export default function App() {
                     </div>
                   </motion.div>
                 )}
-
-                {legacyJobsCount > 0 && user && !isQuotaExceeded && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl p-6 mb-6"
-                  >
-                    <div className="flex items-start gap-4">
-                      <div className="bg-amber-100 dark:bg-amber-800 p-2 rounded-full">
-                        <Database className="w-6 h-6 text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="text-lg font-bold text-amber-900 dark:text-amber-300 mb-1">
-                          Legacy Data Detected
-                        </h4>
-                        <p className="text-amber-700 dark:text-amber-400 text-sm mb-4">
-                          We found {legacyJobsCount}+ jobs in the old database structure. Migrating them will move them to your private space so you don't lose your tracking history.
-                        </p>
-                        <button
-                          onClick={migrateLegacyJobs}
-                          disabled={isMigrating}
-                          className="bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white px-6 py-2 rounded-xl font-bold transition-all shadow-sm flex items-center gap-2"
-                        >
-                          {isMigrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                          Migrate Data Now
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
               </AnimatePresence>
 
                 <div className="flex items-center justify-between mb-2">
@@ -1239,7 +1152,7 @@ export default function App() {
                 </div>
                 <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
                   <Calendar className="w-3 h-3" />
-                  Last updated: {jobs.length > 0 ? new Date((jobs[0].scrapedAt as any)?.seconds * 1000).toLocaleString() : 'Never'}
+                  Last updated: {lastScrapeAt ? (lastScrapeAt as any).toDate().toLocaleString() : (jobs.length > 0 ? (typeof jobs[0].scrapedAt === 'string' ? new Date(jobs[0].scrapedAt).toLocaleString() : new Date((jobs[0].scrapedAt as any).seconds * 1000).toLocaleString()) : 'Never')}
                 </div>
               </div>
 
@@ -1435,6 +1348,61 @@ export default function App() {
           </div>
         )}
       </main>
+      {/* Debug Section for User */}
+      {user && user.email === 'glaborie@gmail.com' && (
+        <div className="mt-8 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl font-mono text-[10px] leading-relaxed">
+            <div className="flex items-center gap-2 mb-4 text-xs font-bold text-blue-400">
+              <Database className="w-4 h-4" />
+              DEBUG CONSOLE
+            </div>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <p className="text-slate-500 mb-1">CURRENT DB (USERS)</p>
+                <p>Status: {jobs.length > 0 ? 'Data Found' : 'Empty'}</p>
+                <p>Count: {jobs.length}</p>
+                <p className="mt-2 text-slate-500">AUTH INFO</p>
+                <p>UID: {user.uid}</p>
+                <p>Email: {user.email}</p>
+              </div>
+              <div>
+                <p className="text-slate-500 mb-1">SYSTEM CONTROLS</p>
+                <div className="flex flex-wrap gap-2">
+                  <button 
+                    onClick={purgeLegacyData}
+                    className="bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 rounded text-[10px] font-bold"
+                  >
+                    Purge All Legacy Tables
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      if (!user) return;
+                      try {
+                        const testRef = doc(db, 'users', user.uid, 'settings', 'test_' + Date.now());
+                        await setDoc(testRef, { test: true });
+                        alert('Write successful!');
+                        await deleteDoc(testRef);
+                      } catch (e: any) {
+                        console.error("Test Write Failed:", e);
+                        alert('Write failed: ' + e.message);
+                      }
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded text-[10px] font-bold"
+                  >
+                    Test Firestore Write
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="border-t border-slate-800 pt-4 mt-4">
+              <p className="text-slate-500 mb-1 uppercase">Filtering Logic</p>
+              <p>Active Filter: {activeFilter}</p>
+              <p>Excluded: {excludedKeywords.join(', ') || 'None'}</p>
+              <p>Filtered List: {filteredJobs.length} visible</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

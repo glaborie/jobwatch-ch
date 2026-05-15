@@ -1,72 +1,24 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 0. Global Safety Net
+    // Reusable helpers
+    function isSignedIn() { return request.auth != null; }
+    function incoming() { return request.resource.data; }
+    
+    // Default Deny
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Reuseable hardened global helpers
-    function isSignedIn() { return request.auth != null; }
-    function isVerified() { 
-      return isSignedIn() && request.auth.token.email_verified == true; 
-    }
-    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
-    function incoming() { return request.resource.data; }
-    function existing() { return resource.data; }
-
-    // Validation Blueprint: Job
-    function isValidJob(data) {
-      return data.keys().hasAll(['title', 'company', 'url', 'source', 'scrapedAt', 'status'])
-        && data.title is string && data.title.size() <= 500
-        && data.company is string && data.company.size() <= 500
-        && data.url is string && data.url.size() <= 2048
-        && data.source is string && data.source.size() <= 100
-        && data.status in ['new', 'applied', 'discarded']
-        && data.scrapedAt is timestamp
-        && (data.get('publishedAt', null) == null || data.publishedAt is timestamp)
-        && (data.get('description', '') is string && data.get('description', '').size() <= 10000)
-        && (data.get('location', '') is string && data.get('location', '').size() <= 500)
-        && (data.get('query', '') is string && data.get('query', '').size() <= 500)
-        && (data.get('summary', '') is string && data.get('summary', '').size() <= 5000);
+    // Match all documents under a user's UID (including settings and jobs)
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Validation Blueprint: UserSettings
-    function isValidSettings(data) {
-      return (data.get('ignoredLocations', []) is list && data.get('ignoredLocations', []).size() <= 100)
-        && (data.get('searchQueries', []) is list && data.get('searchQueries', []).size() <= 50)
-        && (data.get('selectedSources', []) is list && data.get('selectedSources', []).size() <= 20)
-        && (data.get('excludedKeywords', []) is list && data.get('excludedKeywords', []).size() <= 100)
-        && (data.get('theme', 'light') in ['light', 'dark']);
+    // Legacy/Top-level jobs for migration
+    match /jobs/{jobId} {
+      allow read, delete: if isSignedIn();
+      allow write: if false;
     }
-
-    // Match Groups
-    match /users/{userId} {
-      // User Settings
-      match /settings/preferences {
-        allow read: if isOwner(userId);
-        allow write: if isVerified() && isOwner(userId) && isValidSettings(incoming());
-      }
-
-      // User Jobs
-      match /jobs/{jobId} {
-        allow list: if isOwner(userId);
-        allow get: if isOwner(userId) && isValidId(jobId);
-
-        allow create: if isVerified() && isOwner(userId) && isValidId(jobId) && isValidJob(incoming());
-
-        allow update: if isVerified() && isOwner(userId) && isValidId(jobId) && isValidJob(incoming()) && (
-          // Action: Update Status or Summary (Pillar 4)
-          incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['summary']) ||
-          // Immutable protection check (Pillar 9) - though covered by hasOnly mostly
-          (incoming().url == existing().url && incoming().source == existing().source)
-        );
-
-        allow delete: if isOwner(userId);
-      }
-    }
-
   }
 }
